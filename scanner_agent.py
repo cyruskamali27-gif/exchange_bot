@@ -10,11 +10,13 @@ from config import TELETHON_API_ID, TELETHON_API_HASH, TELETHON_PHONE, ADMIN_ID,
 from negotiation_agent import send_intro_message, process_message, conversations
 from contacted_users import is_contacted, add as add_contacted
 from voice_agent import voice_to_text, send_voice_message
-
+from natural_replies import get_reply
+from agent_memory import log_conversation, detect_customer_tone
 
 logging.basicConfig(level=logging.INFO)
 
 last_message_time = {}
+
 
 def extract_amount(text):
     nums = re.findall(r'\d+', text.replace(',', ''))
@@ -23,6 +25,7 @@ def extract_amount(text):
         if 10 <= v <= 50000:
             return v
     return 10
+
 
 def detect_type(text):
     t = text.lower()
@@ -36,7 +39,6 @@ def detect_type(text):
 async def run():
     client = TelegramClient('exchange_agent', TELETHON_API_ID, TELETHON_API_HASH)
     await client.start(phone=TELETHON_PHONE)
-
     print("✅ Scanner running...")
 
     @client.on(events.NewMessage)
@@ -67,11 +69,15 @@ async def run():
         await client.send_message(uid, reply)
 
         bot = Bot(token=BOT_TOKEN)
-        await bot.send_message(ADMIN_ID, f"New user: {uid} | {amount}")
+        deal_label = "فروش" if t == "seller" else "خرید"
+        await bot.send_message(
+            ADMIN_ID,
+            f"👤 مشتری جدید: `{uid}` | {amount} CAD | {deal_label}",
+            parse_mode="Markdown"
+        )
 
     @client.on(events.NewMessage(incoming=True))
     async def private_handler(event):
-
         if event.out or not event.is_private:
             return
 
@@ -84,10 +90,13 @@ async def run():
         use_voice = False
 
         if event.message.voice:
-            await event.respond("🎧 در حال پردازش...")
+            await event.respond(get_reply("processing_voice"))
             audio = await event.download_media(bytes)
             text = await voice_to_text(audio)
             use_voice = True
+            if not text:
+                await event.respond("نشنیدم، دوباره بگو.")
+                return
         else:
             text = event.message.message or ""
 
@@ -97,11 +106,9 @@ async def run():
         now = time.time()
         if now - last_message_time.get(uid, 0) > 60:
             use_voice = True
-
         last_message_time[uid] = now
 
         conv = conversations.get(uid, {"type": "buyer", "amount": 10})
-
         reply = await process_message(client, uid, "user", text, conv["type"], conv["amount"])
 
         if use_voice:
@@ -116,4 +123,3 @@ async def run():
 
 if __name__ == "__main__":
     asyncio.run(run())
-
