@@ -93,7 +93,7 @@ async def fetch_latest_from_channels(client):
        await asyncio.sleep(300)  # هر ۵ دقیقه
 
 async def run_ocr_monitor():
-   client = TelegramClient('exchange_agent', int(TELETHON_API_ID), TELETHON_API_HASH)
+   client = TelegramClient('exchange_ocr', int(TELETHON_API_ID), TELETHON_API_HASH)
    await client.start(phone=TELETHON_PHONE)
    print("✅ OCR Price Monitor شروع شد - آپدیت هر ۵ دقیقه")
 
