@@ -4,7 +4,7 @@ import logging
 from PIL import Image
 import pytesseract
 import io
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from telethon import TelegramClient, events
 from config import TELETHON_API_ID, TELETHON_API_HASH, TELETHON_PHONE
 from price_engine import save_market_price
@@ -70,8 +70,8 @@ async def fetch_latest_from_channels(client):
            try:
                messages = await client.get_messages(channel, limit=3)
                for msg in messages:
-                   msg_time = msg.date.replace(tzinfo=None)
-                   age_minutes = (datetime.utcnow() - msg_time).total_seconds() / 60
+                   msg_time = msg.date.astimezone(timezone.utc)
+                   age_minutes = (datetime.now(timezone.utc) - msg_time).total_seconds() / 60
                    if age_minutes > 5:
                        continue
                    price = None
@@ -100,8 +100,8 @@ async def run_ocr_monitor():
    @client.on(events.NewMessage(chats=PRICE_CHANNELS))
    async def handler(event):
        try:
-           msg_time = event.message.date.replace(tzinfo=None)
-           age_minutes = (datetime.utcnow() - msg_time).total_seconds() / 60
+           msg_time = event.message.date.astimezone(timezone.utc)
+           age_minutes = (datetime.now(timezone.utc) - msg_time).total_seconds() / 60
            if age_minutes > 5:
                return
            price = None
