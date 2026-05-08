@@ -58,7 +58,8 @@ SYSTEM_PROMPT = """
 - اگه نرخ داری: مستقیم بگو، بدون مقدمه
 
 کارت:
-خرید و فروش دلار کانادا — انتقال به ایران، ترکیه، امارات — پرداخت Interac (۱۵–۳۰ دقیقه)
+خرید و فروش دلار کانادا (CAD)، دلار آمریکا (USD)، تتر (USDT)
+انتقال به ایران، ترکیه، امارات — پرداخت Interac (۱۵–۳۰ دقیقه)
 
 نشانه‌ها (فقط آخر پیام اگه لازم بود):
 [CONFIRMED] — توافق شد
@@ -96,12 +97,22 @@ def _feedback_keyboard(log_id):
     ])
 
 
+def _detect_currency_from_message(text):
+    t = text.lower()
+    if any(k in t for k in ["تتر", "usdt"]):
+        return "USDT"
+    if any(k in t for k in ["آمریکا", "امریکا", " usd"]):
+        return "USD"
+    return "CAD"
+
+
 async def generate_response(user_id, user_message, user_type, amount_cad, stage, profile=None):
     # Manager handoff — no auto-price for large amounts
     if should_send_to_manager(amount_cad):
         return get_reply("manager_required"), "friendly"
 
-    price_info = calculate_customer_price("CAD", amount_cad, user_type)
+    currency = _detect_currency_from_message(user_message)
+    price_info = calculate_customer_price(currency, amount_cad, user_type)
 
     if price_info and not price_info.get("manager_required"):
         price_text   = f"{price_info['price']:,.0f} تومان"
@@ -124,10 +135,11 @@ async def generate_response(user_id, user_message, user_type, amount_cad, stage,
     history      = conversations.get(user_id, {}).get("history", [])
     history_text = "\n".join(f"{h['role']}: {h['msg']}" for h in history[-6:])
 
+    cur_label = {"USDT": "تتر", "USD": "دلار آمریکا", "CAD": "دلار کانادا"}.get(currency, currency)
     prompt = f"""{SYSTEM_PROMPT}
 {profile_hint}
-نوع معامله: {"فروش دلار به ما" if user_type == "seller" else "خرید دلار از ما"}
-مبلغ: {amount_cad} دلار کانادا
+نوع معامله: {"فروش " + cur_label + " به ما" if user_type == "seller" else "خرید " + cur_label + " از ما"}
+مبلغ: {amount_cad} {cur_label}
 {price_line}
 تاریخچه:
 {history_text}

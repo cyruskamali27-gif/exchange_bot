@@ -38,6 +38,16 @@ def is_price_request(text):
     return has_price_word and not has_deal_word
 
 
+def detect_currency(text):
+    """Detect which currency the customer is asking about."""
+    t = text.lower()
+    if any(k in t for k in ["تتر", "usdt"]):
+        return "USDT"
+    if any(k in t for k in ["آمریکا", "امریکا", " usd"]):
+        return "USD"
+    return "CAD"  # default
+
+
 def extract_amount(text):
     nums = re.findall(r'\d+', text.replace(',', ''))
     for n in nums:
@@ -133,7 +143,11 @@ async def run():
         else:
             use_voice = False   # text in → text out (default)
 
-        conv  = conversations.get(uid, {"type": "buyer", "amount": 10})
+        conv = conversations.get(uid, {"type": "buyer", "amount": 10, "currency": "CAD"})
+        # Update detected currency if customer mentioned one
+        detected_cur = detect_currency(text)
+        if detected_cur != "CAD" or "currency" not in conv:
+            conv["currency"] = detected_cur
         reply = await process_message(client, uid, "user", text, conv["type"], conv["amount"])
 
         if use_voice:
