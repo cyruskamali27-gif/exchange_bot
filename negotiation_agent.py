@@ -3,9 +3,9 @@ import logging
 from datetime import datetime
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from config import BOT_TOKEN, ADMIN_ID, GEMINI_API_KEY, ADMIN_APPROVAL_THRESHOLD
-from price_engine import calculate_customer_price
+from price_engine import calculate_customer_price, get_margin_by_amount, should_send_to_manager
 from database import add_deal
-from natural_replies import get_reply
+from natural_replies import get_reply, reply_delay, should_send_ack
 from agent_memory import (
     log_conversation,
     get_or_create_customer_profile,
@@ -29,18 +29,41 @@ except Exception as e:
 conversations = {}
 
 SYSTEM_PROMPT = """
-تو سیروس هستی — یه صراف ایرانی که سال‌هاست تو کاناداست.
-مثل یه آدم معمولی تهرانی حرف می‌زنی — نه رسمی، نه خیلی شل.
-هیچوقت نمی‌گی ربات یا AI هستی.
-فارسی محاوره‌ای می‌نویسی — مثل پیام واتساپ به یه آشنا.
-حداکثر ۲ جمله کوتاه در هر پیام.
-ایموجی خیلی کم — فقط اگه کاملاً لازم بود.
-هرگز نگو: "در حال پردازش"، "لطفاً منتظر بمانید"، "کاربر گرامی"، "مشتری عزیز"، "سامانه".
-کارت: خرید و فروش دلار کانادا، انتقال پول به ایران، ترکیه، امارات.
-پرداخت Interac — معمولاً ۱۵ تا ۳۰ دقیقه.
-اگه توافق شد بنویس [CONFIRMED]
-اگه مشتری چانه زد بنویس [BARGAINING]
-اگه مشتری جواب نداد بنویس [SILENT]
+تو سیروس هستی — صراف ایرانی تورنتو. سرت شلوغه.
+
+━━ قوانین سخت — هیچوقت نقض نمیشن ━━
+
+سبک نوشتن:
+- فارسی محاوره‌ای تهرانی مدرن — مثل پیام واتساپ یه آدم واقعی
+- حداکثر ۱ یا ۲ جمله کوتاه در هر پیام
+- اگه مشتری هنوز همه چیز رو نگفته، فقط یه سوال بپرس
+- یه پیام بده، منتظر جواب مشتری بمون — چند پیام پشت‌سرهم نفرست
+- ایموجی نفرست
+
+جملات کاملاً ممنوع — هرگز استفاده نکن:
+- "یه لحظه" / "یه لحظه چک می‌کنم" / "باشه چک می‌کنم"
+- "چک می‌کنم براتون" / "در حال بررسی"
+- "صبر کن" / "لطفاً منتظر باشید"
+- "مشتری گرامی" / "کاربر گرامی" / "مشتری عزیز"
+- "خوشحالم دوباره پیام دادید" / "احوال شریف" / "در خدمتم بفرمایید"
+- "در حال پردازش" / "سامانه" / "ربات"
+
+تعارف ممنوع:
+- هرگز با احوال‌پرسی شروع نکن
+- اولین جواب فقط "سلام" یا "سلام، بفرمایید"
+
+قیمت:
+- هرگز عدد اختراع نکن
+- اگه نرخ در دسترس نیست: بگو "نرخ الان تابلوئه، چون قیمت‌ها لحظه‌ای هستن"
+- اگه نرخ داری: مستقیم بگو، بدون مقدمه
+
+کارت:
+خرید و فروش دلار کانادا — انتقال به ایران، ترکیه، امارات — پرداخت Interac (۱۵–۳۰ دقیقه)
+
+نشانه‌ها (فقط آخر پیام اگه لازم بود):
+[CONFIRMED] — توافق شد
+[BARGAINING] — مشتری چانه زد
+[SILENT] — مشتری جواب نداد
 """
 
 
@@ -74,23 +97,38 @@ def _feedback_keyboard(log_id):
 
 
 async def generate_response(user_id, user_message, user_type, amount_cad, stage, profile=None):
-    price_info = calculate_customer_price("CAD", amount_cad, user_type)
-    if price_info and not price_info.get("manager_required"):
-        price_text = f"{price_info['price']:,.0f} تومان"
-    else:
-        price_text = get_reply("error_price_unavailable")
+    # Manager handoff — no auto-price for large amounts
+    if should_send_to_manager(amount_cad):
+        return get_reply("manager_required"), "friendly"
 
-    best_tone = get_best_reply_style(stage)
+    price_info = calculate_customer_price("CAD", amount_cad, user_type)
+
+    if price_info and not price_info.get("manager_required"):
+        price_text   = f"{price_info['price']:,.0f} تومان"
+        margin       = price_info.get("margin", 0)
+        price_line   = (
+            f"نرخ ما: {price_text}"
+            + (f" | سقف چانه‌زنی: {margin} تومان (به مشتری نگو)" if margin else "")
+        )
+    else:
+        # No live data — never invent a price
+        price_line = (
+            "قیمت لحظه‌ای الان در دسترس نیست. "
+            "به مشتری بگو نرخ الان تابلوئه و چند دقیقه دیگه دوباره پیام بده. "
+            "هیچ عددی اختراع نکن."
+        )
+
+    best_tone    = get_best_reply_style(stage)
     profile_hint = _build_profile_hint(profile)
 
-    history = conversations.get(user_id, {}).get("history", [])
+    history      = conversations.get(user_id, {}).get("history", [])
     history_text = "\n".join(f"{h['role']}: {h['msg']}" for h in history[-6:])
 
     prompt = f"""{SYSTEM_PROMPT}
 {profile_hint}
 نوع معامله: {"فروش دلار به ما" if user_type == "seller" else "خرید دلار از ما"}
 مبلغ: {amount_cad} دلار کانادا
-نرخ ما: {price_text}
+{price_line}
 تاریخچه:
 {history_text}
 پیام جدید: {user_message}
@@ -123,6 +161,17 @@ async def process_message(client, user_id, username, user_message, user_type, am
 
     if customer_tone == "impatient" and profile.get("profile_type") == "unknown":
         update_customer_profile(user_id, profile_type="impatient")
+
+    # natural pause — feels human, not instant-bot
+    await asyncio.sleep(reply_delay(customer_tone))
+
+    # occasionally send a short ack before the real reply
+    if should_send_ack(customer_tone):
+        try:
+            await client.send_message(user_id, get_reply("listening"))
+            await asyncio.sleep(1.2)
+        except Exception:
+            pass
 
     response, tone_used = await generate_response(
         user_id, user_message, user_type, amount_cad, conv["stage"], profile
@@ -207,14 +256,11 @@ async def send_intro_message(client, user_id, username, user_type, amount_cad):
     elif user_type == "seller":
         price_info = calculate_customer_price("CAD", amount_cad, "seller")
         if price_info and not price_info.get("manager_required"):
-            msg = (
-                f"سلام! دیدم دلار داری برای فروش. "
-                f"برای {amount_cad} دلار، {price_info['price']:,.0f} تومان می‌دم — Interac. خوبه؟"
-            )
+            msg = f"سلام. دیدم می‌فروشی — {amount_cad} دلار؟ {price_info['price']:,.0f} تومان می‌دم."
         else:
-            msg = f"سلام! دیدم دلار داری برای فروش. چقدر می‌خوای بفروشی؟"
+            msg = "سلام. دیدم دلار می‌فروشی. چقدر؟"
     else:
-        msg = f"سلام! دیدم دلار کانادا می‌خوای. چه مبلغی لازم داری؟"
+        msg = "سلام. دیدم دلار می‌خوای. چند تا؟"
 
     conversations[user_id] = {
         "history": [{"role": "سیروس", "msg": msg}],

@@ -31,3 +31,20 @@ BUY_SPREAD_TOMAN = int(os.environ.get("BUY_SPREAD_TOMAN", 4000))
 TWILIO_ACCOUNT_SID  = os.environ.get("TWILIO_ACCOUNT_SID", "")
 TWILIO_AUTH_TOKEN   = os.environ.get("TWILIO_AUTH_TOKEN", "")
 TWILIO_FROM_NUMBER  = os.environ.get("TWILIO_FROM_NUMBER", "")
+
+# ─── Voice reply flags ────────────────────────────────────────────
+# Disabled by default: current ElevenLabs voice sounds non-Iranian.
+# Set VOICE_REPLIES_ENABLED=true in .env only after accent is verified.
+VOICE_REPLIES_ENABLED       = os.environ.get("VOICE_REPLIES_ENABLED", "false").lower() == "true"
+PRICE_REPLIES_ALWAYS_TEXT   = os.environ.get("PRICE_REPLIES_ALWAYS_TEXT", "true").lower() == "true"
+DISABLE_VOICE_IF_ACCENT_BAD = os.environ.get("DISABLE_VOICE_IF_ACCENT_BAD", "true").lower() == "true"
+
+# ─── Pricing constants ────────────────────────────────────────────
+USD_CAD_RATE         = float(os.environ.get("USD_CAD_RATE", "1.36"))
+MARKET_SPREAD_TOMAN  = int(os.environ.get("MARKET_SPREAD_TOMAN", "500"))
+MAX_PRICE_AGE_MINUTES = int(os.environ.get("MAX_PRICE_AGE_MINUTES", "60"))
+
+# ─── Telegram price source channels ──────────────────────────────
+PRICE_CHANNELS_USDT = ["tetherpriceFa", "tether_dollar71"]
+PRICE_CHANNELS_USD  = ["tahran_sabza", "SarafiBahmaniCa", "ApadanaCurrencyExchange", "hanaexchange"]
+PRICE_CHANNELS_ALL  = PRICE_CHANNELS_USDT + PRICE_CHANNELS_USD

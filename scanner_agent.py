@@ -6,7 +6,11 @@ import time
 from telethon import TelegramClient, events
 from telegram import Bot
 
-from config import TELETHON_API_ID, TELETHON_API_HASH, TELETHON_PHONE, ADMIN_ID, BOT_TOKEN, EXCLUDED_IDS
+from config import (
+    TELETHON_API_ID, TELETHON_API_HASH, TELETHON_PHONE,
+    ADMIN_ID, BOT_TOKEN, EXCLUDED_IDS,
+    VOICE_REPLIES_ENABLED, PRICE_REPLIES_ALWAYS_TEXT,
+)
 from negotiation_agent import send_intro_message, process_message, conversations
 from contacted_users import is_contacted, add as add_contacted
 from voice_agent import voice_to_text, send_voice_message
@@ -16,6 +20,22 @@ from agent_memory import log_conversation, detect_customer_tone
 logging.basicConfig(level=logging.INFO)
 
 last_message_time = {}
+
+_PRICE_KEYWORDS = [
+    "قیمت", "نرخ", "چنده", "چقدره", "چقدر", "rate", "price",
+    "تتر", "دلار", "کانادا", "usdt", "usd", "cad",
+]
+
+
+def is_price_request(text):
+    """True when the message is primarily a rate/price inquiry (no buy/sell intent)."""
+    if not text:
+        return False
+    t = text.lower()
+    has_price_word = any(k in t for k in _PRICE_KEYWORDS)
+    has_deal_word  = any(k in t for k in ["خرید", "فروش", "buy", "sell"])
+    # Pure price query: has price keyword but no deal action
+    return has_price_word and not has_deal_word
 
 
 def extract_amount(text):
@@ -87,13 +107,12 @@ async def run():
         if uid in EXCLUDED_IDS:
             return
 
-        use_voice = False
+        customer_sent_voice = False
 
         if event.message.voice:
-            await event.respond(get_reply("processing_voice"))
+            customer_sent_voice = True
             audio = await event.download_media(bytes)
-            text = await voice_to_text(audio)
-            use_voice = True
+            text  = await voice_to_text(audio)
             if not text:
                 await event.respond("نشنیدم، دوباره بگو.")
                 return
@@ -103,12 +122,18 @@ async def run():
         if not text:
             return
 
-        now = time.time()
-        if now - last_message_time.get(uid, 0) > 60:
-            use_voice = True
-        last_message_time[uid] = now
+        last_message_time[uid] = time.time()
 
-        conv = conversations.get(uid, {"type": "buyer", "amount": 10})
+        # Decide reply mode
+        price_req = is_price_request(text)
+        if PRICE_REPLIES_ALWAYS_TEXT and price_req:
+            use_voice = False   # price quotes always in text
+        elif customer_sent_voice and VOICE_REPLIES_ENABLED:
+            use_voice = True    # mirror voice only if voice accent is enabled
+        else:
+            use_voice = False   # text in → text out (default)
+
+        conv  = conversations.get(uid, {"type": "buyer", "amount": 10})
         reply = await process_message(client, uid, "user", text, conv["type"], conv["amount"])
 
         if use_voice:
