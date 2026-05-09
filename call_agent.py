@@ -1,5 +1,6 @@
 import logging
 from telegram import Bot
+from natural_replies import voice_optimize
 from config import (
     TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM_NUMBER,
     BOT_TOKEN, ADMIN_ID,
@@ -68,7 +69,7 @@ async def call_customer(phone_number: str, message_text: str) -> dict:
         log.warning("call_customer: phone '%s' has no country code — prepending +1", phone)
         phone = "+1" + phone.lstrip("0")
 
-    twiml = _build_twiml(message_text)
+    twiml = _build_twiml(voice_optimize(message_text))
     log.info("Initiating call → %s | message: %s", phone, message_text[:60])
 
     try:

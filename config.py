@@ -32,6 +32,11 @@ TWILIO_ACCOUNT_SID  = os.environ.get("TWILIO_ACCOUNT_SID", "")
 TWILIO_AUTH_TOKEN   = os.environ.get("TWILIO_AUTH_TOKEN", "")
 TWILIO_FROM_NUMBER  = os.environ.get("TWILIO_FROM_NUMBER", "")
 
+# ─── Safe / test mode ────────────────────────────────────────────
+SAFE_MODE        = os.environ.get("SAFE_MODE", "false").lower() == "true"
+TEST_GROUP_ONLY  = os.environ.get("TEST_GROUP_ONLY", "false").lower() == "true"
+TEST_GROUP_ID    = int(os.environ.get("TEST_GROUP_ID", "0"))
+
 # ─── Voice reply flags ────────────────────────────────────────────
 # Disabled by default: current ElevenLabs voice sounds non-Iranian.
 # Set VOICE_REPLIES_ENABLED=true in .env only after accent is verified.
