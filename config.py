@@ -29,6 +29,11 @@ EXCLUDED_IDS = []
 BUY_SPREAD_TOMAN  = int(os.environ.get("BUY_SPREAD_TOMAN",  4000))
 SELL_SPREAD_TOMAN = int(os.environ.get("SELL_SPREAD_TOMAN",  500))
 
+# ─── Office ambience mixing ───────────────────────────────────────
+ENABLE_OFFICE_AMBIENCE  = os.environ.get("ENABLE_OFFICE_AMBIENCE", "true").lower() == "true"
+OFFICE_AMBIENCE_FILE    = os.environ.get("OFFICE_AMBIENCE_FILE", "/var/www/exchange_bot/assets/office_ambience.mp3")
+OFFICE_AMBIENCE_VOLUME  = float(os.environ.get("OFFICE_AMBIENCE_VOLUME", "0.04"))
+
 TWILIO_ACCOUNT_SID  = os.environ.get("TWILIO_ACCOUNT_SID", "")
 TWILIO_AUTH_TOKEN   = os.environ.get("TWILIO_AUTH_TOKEN", "")
 TWILIO_FROM_NUMBER  = os.environ.get("TWILIO_FROM_NUMBER", "")

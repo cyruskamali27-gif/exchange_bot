@@ -1,9 +1,10 @@
 import asyncio
 import logging
+import requests
 from datetime import datetime
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from config import BOT_TOKEN, ADMIN_ID, GEMINI_API_KEY, ADMIN_APPROVAL_THRESHOLD
-from price_engine import calculate_customer_price, get_margin_by_amount, should_send_to_manager
+from price_engine import calculate_customer_price, calculate_rate, get_margin_by_amount, should_send_to_manager
 from database import add_deal
 from natural_replies import get_reply, reply_delay, should_send_ack
 from agent_memory import (
@@ -27,6 +28,44 @@ except Exception as e:
     print(f"❌ Gemini error: {e}")
 
 conversations = {}
+
+_CUR_LABEL = {"USDT": "تتر", "USD": "دلار آمریکا", "CAD": "دلار کانادا"}
+
+
+def get_live_exchange_rate(currency: str | None = None) -> dict | None:
+    """
+    Fetch live buy/sell rates from the price engine (same DB the API uses).
+    Returns dict like {"USDT": {"source": ..., "our_sell": ..., "our_buy": ...}, ...}
+    or None if no data available.
+    """
+    targets = [currency] if currency else ["USDT", "USD", "CAD"]
+    result = {}
+    for cur in targets:
+        rate = calculate_rate(cur)
+        if rate:
+            result[cur] = {
+                "source":   rate["raw_source"],
+                "our_sell": rate["our_sell"],
+                "our_buy":  rate["our_buy"],
+            }
+    return result if result else None
+
+
+def _format_live_rate_persian(rates: dict, currency: str | None = None) -> str:
+    """Format live rate data as a short, clear Persian string for the AI prompt."""
+    lines = []
+    targets = [currency] if currency else ["USDT", "USD", "CAD"]
+    for cur in targets:
+        d = rates.get(cur)
+        if not d:
+            lines.append(f"نرخ {_CUR_LABEL.get(cur, cur)}: در دسترس نیست")
+            continue
+        lines.append(
+            f"نرخ {_CUR_LABEL.get(cur, cur)}: "
+            f"فروش ما {d['our_sell']:,} تومان | "
+            f"خرید ما {d['our_buy']:,} تومان"
+        )
+    return "\n".join(lines)
 
 SYSTEM_PROMPT = """
 تو سیروس هستی — صراف ایرانی تورنتو. سرت شلوغه.
@@ -106,28 +145,45 @@ def _detect_currency_from_message(text):
     return "CAD"
 
 
-async def generate_response(user_id, user_message, user_type, amount_cad, stage, profile=None):
+async def generate_response(user_id, user_message, user_type, amount_cad, stage, profile=None, is_price_request=False):
     # Manager handoff — no auto-price for large amounts
     if should_send_to_manager(amount_cad):
         return get_reply("manager_required"), "friendly"
 
-    currency = _detect_currency_from_message(user_message)
-    price_info = calculate_customer_price(currency, amount_cad, user_type)
+    currency  = _detect_currency_from_message(user_message)
+    cur_label = _CUR_LABEL.get(currency, currency)
 
-    if price_info and not price_info.get("manager_required"):
-        price_text   = f"{price_info['price']:,.0f} تومان"
-        margin       = price_info.get("margin", 0)
-        price_line   = (
-            f"نرخ ما: {price_text}"
-            + (f" | سقف چانه‌زنی: {margin} تومان (به مشتری نگو)" if margin else "")
-        )
+    # ── Live rate lookup (always fresh, required before any price answer) ──
+    live_rates = get_live_exchange_rate(currency)
+
+    if is_price_request:
+        # Rule 4: price question → inject live rate directly, keep answer short
+        if live_rates:
+            rate_block = _format_live_rate_persian(live_rates, currency)
+            price_line = (
+                f"[نرخ لحظه‌ای — از این استفاده کن، عدد دیگه‌ای نساز]\n{rate_block}\n"
+                "جواب باید کوتاه، مستقیم و فارسی باشه. فقط نرخ رو بگو."
+            )
+        else:
+            price_line = (
+                "نرخ لحظه‌ای الان در دسترس نیست. "
+                "به مشتری بگو: 'نرخ الان تابلوئه، چند دقیقه دیگه پیام بده.' "
+                "هیچ عددی اختراع نکن."
+            )
     else:
-        # No live data — never invent a price
-        price_line = (
-            "قیمت لحظه‌ای الان در دسترس نیست. "
-            "به مشتری بگو نرخ الان تابلوئه و چند دقیقه دیگه دوباره پیام بده. "
-            "هیچ عددی اختراع نکن."
-        )
+        # Non-price message: still provide rate context for the AI
+        price_info = calculate_customer_price(currency, amount_cad, user_type)
+        if price_info and not price_info.get("manager_required"):
+            margin     = price_info.get("margin", 0)
+            price_line = (
+                f"نرخ ما: {price_info['price']:,.0f} تومان"
+                + (f" | سقف چانه‌زنی: {margin} تومان (به مشتری نگو)" if margin else "")
+            )
+        else:
+            price_line = (
+                "قیمت لحظه‌ای الان در دسترس نیست. "
+                "هیچ عددی اختراع نکن."
+            )
 
     best_tone    = get_best_reply_style(stage)
     profile_hint = _build_profile_hint(profile)
@@ -135,7 +191,6 @@ async def generate_response(user_id, user_message, user_type, amount_cad, stage,
     history      = conversations.get(user_id, {}).get("history", [])
     history_text = "\n".join(f"{h['role']}: {h['msg']}" for h in history[-6:])
 
-    cur_label = {"USDT": "تتر", "USD": "دلار آمریکا", "CAD": "دلار کانادا"}.get(currency, currency)
     prompt = f"""{SYSTEM_PROMPT}
 {profile_hint}
 نوع معامله: {"فروش " + cur_label + " به ما" if user_type == "seller" else "خرید " + cur_label + " از ما"}
@@ -158,7 +213,7 @@ async def generate_response(user_id, user_message, user_type, amount_cad, stage,
     return get_reply("customer_buy" if user_type == "buyer" else "customer_sell"), "friendly"
 
 
-async def process_message(client, user_id, username, user_message, user_type, amount_cad):
+async def process_message(client, user_id, username, user_message, user_type, amount_cad, is_price_request=False):
     if user_id not in conversations:
         conversations[user_id] = {
             "history": [], "stage": "negotiating",
@@ -186,7 +241,8 @@ async def process_message(client, user_id, username, user_message, user_type, am
             pass
 
     response, tone_used = await generate_response(
-        user_id, user_message, user_type, amount_cad, conv["stage"], profile
+        user_id, user_message, user_type, amount_cad, conv["stage"], profile,
+        is_price_request=is_price_request,
     )
 
     bot = Bot(token=BOT_TOKEN)

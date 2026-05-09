@@ -1,6 +1,7 @@
 import logging
 from telegram import Bot
 from natural_replies import voice_optimize
+from voice_agent import generate_call_audio_url
 from config import (
     TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM_NUMBER,
     BOT_TOKEN, ADMIN_ID,
@@ -24,16 +25,26 @@ def _get_client():
     return Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 
 
-# ─── TwiML message builder ───────────────────────────────────────────────────
+# ─── TwiML builders ──────────────────────────────────────────────────────────
 
-def _build_twiml(message_text):
-    """Wrap plain text in TwiML <Say> with Persian-friendly settings."""
+def _build_twiml_play(audio_url: str) -> str:
+    """TwiML that plays a hosted MP3 (ElevenLabs + office ambience)."""
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<Response>'
+        f'<Play>{audio_url}</Play>'
+        '<Pause length="1"/>'
+        f'<Play>{audio_url}</Play>'
+        '</Response>'
+    )
+
+
+def _build_twiml_say(message_text: str) -> str:
+    """Fallback TwiML using Twilio Polly TTS when ElevenLabs is unavailable."""
     safe = (
         message_text
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace('"', "&quot;")
+        .replace("&", "&amp;").replace("<", "&lt;")
+        .replace(">", "&gt;").replace('"', "&quot;")
     )
     return (
         '<?xml version="1.0" encoding="UTF-8"?>'
@@ -49,11 +60,8 @@ def _build_twiml(message_text):
 
 async def call_customer(phone_number: str, message_text: str) -> dict:
     """
-    Place an outbound call to phone_number and speak message_text.
-
-    Returns:
-        {"success": True,  "call_sid": "...", "status": "queued"}
-        {"success": False, "error": "...", "notified_admin": bool}
+    Place an outbound Twilio call using ElevenLabs audio + office ambience.
+    Falls back to Polly <Say> if audio generation fails.
     """
     if not phone_number or not phone_number.strip():
         log.warning("call_customer: phone_number is empty — notifying admin")
@@ -69,7 +77,15 @@ async def call_customer(phone_number: str, message_text: str) -> dict:
         log.warning("call_customer: phone '%s' has no country code — prepending +1", phone)
         phone = "+1" + phone.lstrip("0")
 
-    twiml = _build_twiml(voice_optimize(message_text))
+    # Try ElevenLabs + ambience first; fall back to Polly <Say>
+    audio_url = await generate_call_audio_url(message_text)
+    if audio_url:
+        twiml = _build_twiml_play(audio_url)
+        log.info("Using ElevenLabs audio: %s", audio_url)
+    else:
+        twiml = _build_twiml_say(voice_optimize(message_text))
+        log.warning("ElevenLabs failed — falling back to Polly TTS")
+
     log.info("Initiating call → %s | message: %s", phone, message_text[:60])
 
     try:

@@ -9,7 +9,7 @@ from telegram import Bot
 from config import (
     TELETHON_API_ID, TELETHON_API_HASH, TELETHON_PHONE,
     ADMIN_ID, BOT_TOKEN, EXCLUDED_IDS,
-    VOICE_REPLIES_ENABLED, PRICE_REPLIES_ALWAYS_TEXT,
+    VOICE_REPLIES_ENABLED,
     TEST_GROUP_ONLY, TEST_GROUP_ID,
 )
 from negotiation_agent import send_intro_message, process_message, conversations
@@ -22,19 +22,28 @@ logging.basicConfig(level=logging.INFO)
 
 last_message_time = {}
 
+# Tracks first message time + type per user; reset after 5 min idle
+_conv_start = {}
+_CONV_RESET_IDLE = 300  # seconds
+
+# Keywords that force text-only reply (rules 4)
 _PRICE_KEYWORDS = [
-    "قیمت", "نرخ", "چنده", "چقدره", "چقدر", "rate", "price",
-    "تتر", "دلار", "کانادا", "usdt", "usd", "cad",
+    "قیمت", "نرخ", "چنده", "چقدره", "چقدر",
+    "rate", "price", "buy price", "sell price",
+    "تتر", "usdt",
+    "دلار", "usd", "cad", "کانادا",
+    "نرخ خرید", "نرخ فروش",
 ]
 
+# 1 minute: after this, text-started conversations switch to voice
+_VOICE_ESCALATE_SECONDS = 60
 
-def is_price_request(text):
+
+def is_price_request(text: str) -> bool:
     if not text:
         return False
     t = text.lower()
-    has_price_word = any(k in t for k in _PRICE_KEYWORDS)
-    has_deal_word  = any(k in t for k in ["خرید", "فروش", "buy", "sell"])
-    return has_price_word and not has_deal_word
+    return any(k in t for k in _PRICE_KEYWORDS)
 
 
 def detect_currency(text):
@@ -64,24 +73,63 @@ def detect_type(text):
     return None
 
 
+def _resolve_voice(uid: int, customer_sent_voice: bool, price_req: bool) -> bool:
+    """
+    Decide whether to reply with voice.
+
+    Rule 1: text in  → text out
+    Rule 2: voice in → voice out
+    Rule 3: text-started convo > 60 s → voice (escalate)
+    Rule 4: price request → always text, regardless of above
+    """
+    if not VOICE_REPLIES_ENABLED:
+        return False
+
+    # Rule 4 always wins
+    if price_req:
+        return False
+
+    now = time.time()
+    start = _conv_start.get(uid)
+
+    # Reset stale conversation tracking
+    if start and (now - last_message_time.get(uid, now)) > _CONV_RESET_IDLE:
+        _conv_start.pop(uid, None)
+        start = None
+
+    # Record first message of this conversation
+    if start is None:
+        _conv_start[uid] = {"time": now, "type": "voice" if customer_sent_voice else "text"}
+        start = _conv_start[uid]
+
+    # Rule 2: voice in → voice out
+    if customer_sent_voice:
+        return True
+
+    # Rule 3: text-started convo older than 60 s → escalate to voice
+    if start["type"] == "text" and (now - start["time"]) > _VOICE_ESCALATE_SECONDS:
+        return True
+
+    # Rule 1: text in → text out
+    return False
+
+
 async def _handle_message(client, uid, text, customer_sent_voice=False):
-    """Core message handler — shared by both private and test-group paths."""
+    """Core message handler shared by private and test-group paths."""
     last_message_time[uid] = time.time()
 
     price_req = is_price_request(text)
-    if PRICE_REPLIES_ALWAYS_TEXT and price_req:
-        use_voice = False
-    elif customer_sent_voice and VOICE_REPLIES_ENABLED:
-        use_voice = True
-    else:
-        use_voice = False
+    use_voice = _resolve_voice(uid, customer_sent_voice, price_req)
 
     conv = conversations.get(uid, {"type": "buyer", "amount": 10, "currency": "CAD"})
     detected_cur = detect_currency(text)
     if detected_cur != "CAD" or "currency" not in conv:
         conv["currency"] = detected_cur
 
-    reply = await process_message(client, uid, "user", text, conv["type"], conv["amount"])
+    reply = await process_message(
+        client, uid, "user", text, conv["type"], conv["amount"],
+        is_price_request=price_req,
+    )
     return reply, use_voice
 
 
@@ -95,8 +143,6 @@ async def run():
     print("✅ Scanner running...")
 
     # ── Test-group conversation handler ──────────────────────────
-    # Runs the FULL pipeline (Gemini + pricing + voice) but only
-    # inside the designated test group.
     @client.on(events.NewMessage(chats=[TEST_GROUP_ID], incoming=True))
     async def test_group_handler(event):
         if event.out:
@@ -133,11 +179,10 @@ async def run():
             await event.respond(reply)
 
     # ── Production group scanner (outreach to new leads) ─────────
-    # Disabled entirely when TEST_GROUP_ONLY=true.
     @client.on(events.NewMessage)
     async def group_handler(event):
         if TEST_GROUP_ONLY:
-            return  # all outreach disabled in test mode
+            return
 
         if event.out or event.is_private:
             return
@@ -173,11 +218,10 @@ async def run():
         )
 
     # ── Private chat handler ──────────────────────────────────────
-    # Disabled entirely when TEST_GROUP_ONLY=true.
     @client.on(events.NewMessage(incoming=True))
     async def private_handler(event):
         if TEST_GROUP_ONLY:
-            return  # no private chat replies in test mode
+            return
 
         if event.out or not event.is_private:
             return
