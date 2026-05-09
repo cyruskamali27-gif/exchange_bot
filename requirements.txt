@@ -7,3 +7,6 @@ httpx==0.28.1
 Pillow==10.2.0
 pytesseract==0.3.13
 twilio>=9.0.0
+aiohttp>=3.9.0
+websockets>=16.0
+hume>=0.13.0

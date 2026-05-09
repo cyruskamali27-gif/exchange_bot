@@ -53,6 +53,11 @@ VOICE_REPLIES_ENABLED       = os.environ.get("VOICE_REPLIES_ENABLED", "false").l
 PRICE_REPLIES_ALWAYS_TEXT   = os.environ.get("PRICE_REPLIES_ALWAYS_TEXT", "true").lower() == "true"
 DISABLE_VOICE_IF_ACCENT_BAD = os.environ.get("DISABLE_VOICE_IF_ACCENT_BAD", "true").lower() == "true"
 
+# ─── Hume AI emotion intelligence ────────────────────────────────
+HUME_API_KEY        = os.environ.get("HUME_API_KEY", "")
+HUME_SECRET_KEY     = os.environ.get("HUME_SECRET_KEY", "")
+ENABLE_HUME_EMOTION = os.environ.get("ENABLE_HUME_EMOTION", "false").lower() == "true"
+
 # ─── Pricing constants ────────────────────────────────────────────
 USD_CAD_RATE         = float(os.environ.get("USD_CAD_RATE", "1.36"))
 MARKET_SPREAD_TOMAN  = int(os.environ.get("MARKET_SPREAD_TOMAN", "500"))

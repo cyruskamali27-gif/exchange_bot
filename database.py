@@ -3,6 +3,123 @@ from datetime import datetime
 
 DB_FILE = "/var/www/exchange_bot/exchange.db"
 
+def _migrate_column(conn, table, col, definition):
+    """Add column if it doesn't already exist."""
+    try:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {definition}")
+    except Exception:
+        pass
+
+
+def init_extended_tables(conn):
+    """Create all new tables and migrate existing ones."""
+    c = conn.cursor()
+
+    # ── Augment customer_profiles with new fields ──────────────────
+    for col, defn in [
+        ("mood",               "TEXT DEFAULT 'unknown'"),
+        ("emotion",            "TEXT"),
+        ("prefers_voice",      "INTEGER DEFAULT 0"),
+        ("is_vip",             "INTEGER DEFAULT 0"),
+        ("deal_count",         "INTEGER DEFAULT 0"),
+        ("negotiation_style",  "TEXT DEFAULT 'unknown'"),
+        ("trust_level",        "REAL DEFAULT 0.5"),
+        ("banned",             "INTEGER DEFAULT 0"),
+    ]:
+        _migrate_column(conn, "customer_profiles", col, defn)
+
+    c.execute("""CREATE TABLE IF NOT EXISTS conversation_memory (
+        id               INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id          TEXT,
+        role             TEXT,
+        message          TEXT,
+        timestamp        TEXT,
+        was_voice        INTEGER DEFAULT 0,
+        deal_amount      REAL,
+        emotion_detected TEXT
+    )""")
+
+    c.execute("""CREATE TABLE IF NOT EXISTS learned_mistakes (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        mistake_type    TEXT,
+        original_reply  TEXT,
+        corrected_reply TEXT,
+        admin_id        TEXT,
+        created_at      TEXT
+    )""")
+
+    c.execute("""CREATE TABLE IF NOT EXISTS successful_patterns (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        pattern_text  TEXT UNIQUE,
+        success_count INTEGER DEFAULT 1,
+        customer_mood TEXT,
+        last_used     TEXT
+    )""")
+
+    c.execute("""CREATE TABLE IF NOT EXISTS failed_patterns (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        pattern_text  TEXT UNIQUE,
+        fail_count    INTEGER DEFAULT 1,
+        customer_mood TEXT,
+        last_used     TEXT
+    )""")
+
+    c.execute("""CREATE TABLE IF NOT EXISTS pricing_decisions (
+        id               INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id          TEXT,
+        amount_cad       REAL,
+        price_toman      REAL,
+        source           TEXT,
+        customer_accepted INTEGER DEFAULT 0,
+        created_at       TEXT
+    )""")
+
+    c.execute("""CREATE TABLE IF NOT EXISTS daily_learning (
+        id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+        date                     TEXT UNIQUE,
+        total_deals              INTEGER DEFAULT 0,
+        success_rate             REAL DEFAULT 0,
+        avg_negotiation_rounds   REAL DEFAULT 0,
+        common_emotions          TEXT,
+        notes                    TEXT
+    )""")
+
+    c.execute("""CREATE TABLE IF NOT EXISTS customer_preferences (
+        id               INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id          TEXT UNIQUE,
+        prefers_voice    INTEGER DEFAULT 0,
+        language_style   TEXT,
+        best_contact_time TEXT,
+        notes            TEXT
+    )""")
+
+    c.execute("""CREATE TABLE IF NOT EXISTS voice_assignments (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id     TEXT UNIQUE,
+        voice_id    TEXT,
+        assigned_at TEXT
+    )""")
+
+    c.execute("""CREATE TABLE IF NOT EXISTS emotion_history (
+        id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id               TEXT,
+        emotion               TEXT,
+        dominant_emotion      TEXT,
+        urgency_score         REAL,
+        trust_score           REAL,
+        suspicion_score       REAL,
+        negotiation_pressure  REAL,
+        emotional_energy      REAL,
+        emotional_stability   REAL,
+        emotion_confidence    REAL,
+        source                TEXT DEFAULT 'rule_based',
+        detected_at           TEXT,
+        conversation_id       INTEGER
+    )""")
+
+    conn.commit()
+
+
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
@@ -38,6 +155,7 @@ def init_db():
         amount_cad REAL,
         processed INTEGER DEFAULT 0,
         created_at TEXT)''')
+    init_extended_tables(conn)
     conn.commit()
     conn.close()
 

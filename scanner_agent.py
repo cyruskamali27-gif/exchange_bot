@@ -13,7 +13,7 @@ from config import (
     TEST_GROUP_ONLY, TEST_GROUP_ID,
 )
 from negotiation_agent import send_intro_message
-from elevenlabs_agent import chat as elevenlabs_chat, get_live_rate_text
+import exchange_brain
 from contacted_users import is_contacted, add as add_contacted
 from voice_agent import voice_to_text, send_voice_message
 from natural_replies import get_reply
@@ -115,20 +115,12 @@ def _resolve_voice(uid: int, customer_sent_voice: bool, price_req: bool) -> bool
     return False
 
 
-async def _handle_message(client, uid, text, customer_sent_voice=False):
-    """Core message handler shared by private and test-group paths."""
+async def _handle_message(client, uid, text, customer_sent_voice=False, sender_name=""):
+    """Core message handler — delegates all logic to exchange_brain."""
     last_message_time[uid] = time.time()
-
-    price_req = is_price_request(text)
-    use_voice = _resolve_voice(uid, customer_sent_voice, price_req)
-
-    if price_req:
-        detected_cur = detect_currency(text)
-        cur = detected_cur if detected_cur != "CAD" else None
-        reply = await get_live_rate_text(cur)
-    else:
-        reply = await elevenlabs_chat(uid, text)
-
+    reply, use_voice = await exchange_brain.process(
+        uid, text, sender_name=sender_name, is_voice_input=customer_sent_voice
+    )
     return reply, use_voice
 
 
@@ -168,7 +160,8 @@ async def run():
         if not text or len(text) < 2:
             return
 
-        reply, use_voice = await _handle_message(client, uid, text, customer_sent_voice)
+        sender_name = getattr(sender, "first_name", "") or getattr(sender, "username", "") or ""
+        reply, use_voice = await _handle_message(client, uid, text, customer_sent_voice, sender_name)
 
         if use_voice:
             ok = await send_voice_message(client, TEST_GROUP_ID, reply)
@@ -246,7 +239,8 @@ async def run():
         if not text:
             return
 
-        reply, use_voice = await _handle_message(client, uid, text, customer_sent_voice)
+        sender_name = getattr(sender, "first_name", "") or getattr(sender, "username", "") or ""
+        reply, use_voice = await _handle_message(client, uid, text, customer_sent_voice, sender_name)
 
         if use_voice:
             ok = await send_voice_message(client, uid, reply)

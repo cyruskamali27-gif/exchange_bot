@@ -16,6 +16,10 @@ from agent_memory import (
     get_daily_report, get_all_customer_profiles,
     get_or_create_customer_profile, update_customer_profile,
 )
+from exchange_brain import save_learned_mistake
+import sqlite3
+
+DB_FILE = "/var/www/exchange_bot/exchange.db"
 
 logging.basicConfig(level=logging.INFO)
 
@@ -98,6 +102,172 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
     await _send_learning_report(update.message.reply_text)
+
+
+# ─── New admin commands ───────────────────────────────────────────────────────
+
+async def cmd_safemode(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Toggle SAFE_MODE: /safemode on  or  /safemode off"""
+    if not is_admin(update.effective_user.id):
+        return
+    args = context.args
+    if not args or args[0].lower() not in ("on", "off"):
+        await update.message.reply_text("استفاده: /safemode on  یا  /safemode off")
+        return
+    val = "true" if args[0].lower() == "on" else "false"
+    # Update .env in-place
+    env_path = "/var/www/exchange_bot/.env"
+    try:
+        with open(env_path) as f:
+            lines = f.readlines()
+        with open(env_path, "w") as f:
+            for line in lines:
+                if line.startswith("SAFE_MODE="):
+                    f.write(f"SAFE_MODE={val}\n")
+                elif line.startswith("TEST_GROUP_ONLY="):
+                    f.write(f"TEST_GROUP_ONLY={val}\n")
+                else:
+                    f.write(line)
+        status = "🔒 فعال" if val == "true" else "🔓 غیرفعال"
+        await update.message.reply_text(f"SAFE_MODE {status}\nبرای اعمال: pm2 restart exchange-scanner")
+    except Exception as e:
+        await update.message.reply_text(f"خطا: {e}")
+
+
+async def cmd_corrections(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show learned mistakes: /corrections"""
+    if not is_admin(update.effective_user.id):
+        return
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        rows = conn.execute(
+            "SELECT id, mistake_type, original_reply, corrected_reply, created_at FROM learned_mistakes ORDER BY id DESC LIMIT 10"
+        ).fetchall()
+        conn.close()
+        if not rows:
+            await update.message.reply_text("هیچ اشتباه یاد گرفته‌ای ثبت نشده.")
+            return
+        text = "📚 اشتباهات یاد گرفته شده:\n━━━━━━━━━━━━━━━━━━\n"
+        for r in rows:
+            text += f"\n#{r[0]} [{r[1]}]\n❌ {r[2][:60] if r[2] else '—'}\n✅ {r[3][:60] if r[3] else '—'}\n"
+        await update.message.reply_text(text[:4000])
+    except Exception as e:
+        await update.message.reply_text(f"خطا: {e}")
+
+
+async def cmd_learning(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show learning stats: /learning"""
+    if not is_admin(update.effective_user.id):
+        return
+    await _send_learning_report(update.message.reply_text)
+
+
+async def cmd_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show live prices: /price"""
+    if not is_admin(update.effective_user.id):
+        return
+    lines = []
+    for cur in ("USDT", "USD", "CAD"):
+        r = calculate_rate(cur)
+        if r:
+            lines.append(f"{cur}: فروش {r['our_sell']:,} | خرید {r['our_buy']:,} | منبع {r['source_label']}")
+        else:
+            lines.append(f"{cur}: — در دسترس نیست")
+    await update.message.reply_text("💱 قیمت‌های لحظه‌ای\n━━━━━━━━━━━━━━━━━━\n" + "\n".join(lines))
+
+
+async def cmd_customers(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """List customers: /customers"""
+    if not is_admin(update.effective_user.id):
+        return
+    profiles = get_all_customer_profiles(limit=15)
+    if not profiles:
+        await update.message.reply_text("هنوز مشتری‌ای ثبت نشده.")
+        return
+    text = f"👥 مشتریان ({len(profiles)})\n━━━━━━━━━━━━━━━━━━\n"
+    for p in profiles:
+        vip  = "⭐ " if p.get("is_vip") else ""
+        name = p.get("username") or p["user_id"]
+        text += f"{vip}👤 {name} | گفتگو: {p['total_conversations']} | موفق: {p['successful_deals']}\n"
+    await update.message.reply_text(text[:4000])
+
+
+async def cmd_emotion(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/emotion [user_id] — show emotion history for a user"""
+    if not is_admin(update.effective_user.id):
+        return
+    args = context.args
+    if not args:
+        await update.message.reply_text("استفاده: /emotion [user_id]")
+        return
+    uid = args[0]
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        rows = conn.execute(
+            """SELECT dominant_emotion, urgency_score, trust_score, suspicion_score, detected_at
+               FROM emotion_history WHERE user_id=? ORDER BY id DESC LIMIT 10""",
+            (uid,)
+        ).fetchall()
+        conn.close()
+        if not rows:
+            await update.message.reply_text(f"تاریخچه احساسی برای {uid} یافت نشد.")
+            return
+        text = f"🧠 احساسات کاربر {uid}\n━━━━━━━━━━━━━━━━━━\n"
+        for r in rows:
+            text += (f"• {r[0]} | urgency={r[1]:.1f} trust={r[2]:.1f} "
+                     f"suspicion={r[3]:.1f} | {r[4][:16]}\n")
+        await update.message.reply_text(text)
+    except Exception as e:
+        await update.message.reply_text(f"خطا: {e}")
+
+
+async def cmd_vip(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/vip [user_id] — toggle VIP status"""
+    if not is_admin(update.effective_user.id):
+        return
+    args = context.args
+    if not args:
+        await update.message.reply_text("استفاده: /vip [user_id]")
+        return
+    uid = args[0]
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        row = conn.execute("SELECT is_vip FROM customer_profiles WHERE user_id=?", (uid,)).fetchone()
+        if not row:
+            await update.message.reply_text(f"کاربر {uid} یافت نشد.")
+            conn.close()
+            return
+        new_vip = 0 if row[0] else 1
+        conn.execute("UPDATE customer_profiles SET is_vip=? WHERE user_id=?", (new_vip, uid))
+        conn.commit()
+        conn.close()
+        status = "⭐ VIP شد" if new_vip else "VIP برداشته شد"
+        await update.message.reply_text(f"کاربر {uid} — {status}")
+    except Exception as e:
+        await update.message.reply_text(f"خطا: {e}")
+
+
+async def cmd_ban(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/ban [user_id] — ban a user"""
+    if not is_admin(update.effective_user.id):
+        return
+    args = context.args
+    if not args:
+        await update.message.reply_text("استفاده: /ban [user_id]")
+        return
+    uid = args[0]
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        conn.execute(
+            "INSERT OR IGNORE INTO customer_profiles (user_id, profile_type, last_seen, created_at) VALUES (?,?,?,?)",
+            (uid, "banned", datetime.now().isoformat(), datetime.now().isoformat())
+        )
+        conn.execute("UPDATE customer_profiles SET banned=1 WHERE user_id=?", (uid,))
+        conn.commit()
+        conn.close()
+        await update.message.reply_text(f"🚫 کاربر {uid} بن شد.")
+    except Exception as e:
+        await update.message.reply_text(f"خطا: {e}")
 
 
 # ─── Pending Deals ───────────────────────────────────────────────────────────
@@ -334,8 +504,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     init_db()
     app = Application.builder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("report", cmd_report))
+    app.add_handler(CommandHandler("start",       start))
+    app.add_handler(CommandHandler("report",      cmd_report))
+    app.add_handler(CommandHandler("safemode",    cmd_safemode))
+    app.add_handler(CommandHandler("corrections", cmd_corrections))
+    app.add_handler(CommandHandler("learning",    cmd_learning))
+    app.add_handler(CommandHandler("price",       cmd_price))
+    app.add_handler(CommandHandler("customers",   cmd_customers))
+    app.add_handler(CommandHandler("emotion",     cmd_emotion))
+    app.add_handler(CommandHandler("vip",         cmd_vip))
+    app.add_handler(CommandHandler("ban",         cmd_ban))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     print("🚀 پنل مدیریت شروع شد...")

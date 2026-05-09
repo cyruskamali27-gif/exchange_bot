@@ -13,16 +13,28 @@ from natural_replies import voice_optimize
 
 
 async def voice_to_text(audio_bytes):
+    """Transcribe voice bytes via Groq Whisper. Returns None gracefully on any failure."""
+    if not GROQ_API_KEY:
+        print("STT: GROQ_API_KEY not set — falling back to text-only mode")
+        return None
+
     def _transcribe():
-        url = "https://api.groq.com/openai/v1/audio/transcriptions"
-        headers = {"Authorization": f"Bearer {GROQ_API_KEY}"}
-        files = {"file": ("audio.ogg", io.BytesIO(audio_bytes), "audio/ogg")}
-        data = {"model": "whisper-large-v3", "language": "fa"}
-        r = requests.post(url, headers=headers, files=files, data=data)
-        if r.status_code != 200:
-            print("STT ERROR:", r.status_code, r.text)
+        try:
+            url = "https://api.groq.com/openai/v1/audio/transcriptions"
+            headers = {"Authorization": f"Bearer {GROQ_API_KEY}"}
+            files = {"file": ("audio.ogg", io.BytesIO(audio_bytes), "audio/ogg")}
+            data = {"model": "whisper-large-v3", "language": "fa"}
+            r = requests.post(url, headers=headers, files=files, data=data, timeout=20)
+            if r.status_code == 401:
+                print("STT: Groq API key invalid — voice recognition disabled")
+                return None
+            if r.status_code != 200:
+                print("STT ERROR:", r.status_code, r.text[:200])
+                return None
+            return r.json().get("text")
+        except Exception as e:
+            print("STT EXCEPTION:", e)
             return None
-        return r.json().get("text")
 
     return await asyncio.to_thread(_transcribe)
 
