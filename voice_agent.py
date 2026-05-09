@@ -52,32 +52,33 @@ def _mp3_to_ogg(mp3_bytes: bytes) -> str:
     return ogg_path
 
 
+def _synthesize_mp3(text: str) -> bytes | None:
+    """Call ElevenLabs TTS and return raw MP3 bytes, or None on failure."""
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_VOICE_ID}"
+    headers = {
+        "xi-api-key": ELEVENLABS_API_KEY,
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "text": text,
+        "model_id": "eleven_multilingual_v2",
+        "voice_settings": {
+            "stability": 0.50,
+            "similarity_boost": 0.85,
+            "style": 0.15,
+            "use_speaker_boost": True,
+        },
+    }
+    r = requests.post(url, headers=headers, json=payload)
+    if r.status_code != 200:
+        print("TTS ERROR:", r.status_code, r.text)
+        return None
+    return r.content
+
+
 async def send_voice_message(client, uid, text):
     optimized = voice_optimize(text)
-
-    def _synthesize():
-        url = f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_VOICE_ID}"
-        headers = {
-            "xi-api-key": ELEVENLABS_API_KEY,
-            "Content-Type": "application/json",
-        }
-        payload = {
-            "text": optimized,
-            "model_id": "eleven_multilingual_v2",
-            "voice_settings": {
-                "stability": 0.50,        # mid-stability → natural variation
-                "similarity_boost": 0.85, # high similarity → stays close to voice sample
-                "style": 0.15,            # light style → removes robotic feel
-                "use_speaker_boost": True,
-            },
-        }
-        r = requests.post(url, headers=headers, json=payload)
-        if r.status_code != 200:
-            print("TTS ERROR:", r.status_code, r.text)
-            return None
-        return r.content
-
-    audio = await asyncio.to_thread(_synthesize)
+    audio = await asyncio.to_thread(_synthesize_mp3, optimized)
     if not audio:
         return False
 
