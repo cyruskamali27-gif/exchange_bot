@@ -65,9 +65,9 @@ async def send_voice_message(client, uid, text):
             "text": optimized,
             "model_id": "eleven_multilingual_v2",
             "voice_settings": {
-                "stability": 0.45,
-                "similarity_boost": 0.75,
-                "style": 0.3,
+                "stability": 0.50,        # mid-stability → natural variation
+                "similarity_boost": 0.85, # high similarity → stays close to voice sample
+                "style": 0.15,            # light style → removes robotic feel
                 "use_speaker_boost": True,
             },
         }

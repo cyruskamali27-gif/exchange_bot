@@ -73,6 +73,20 @@ def log_conversation(user_id, customer_message, agent_reply,
     return log_id
 
 
+def save_experience(user_msg: str, ai_reply: str, success: bool = True, user_id: str = "unknown"):
+    """Record an interaction outcome for learning. Wraps log_conversation + update_deal_outcome."""
+    outcome = "success" if success else "failed"
+    log_id = log_conversation(
+        user_id=user_id,
+        customer_message=user_msg,
+        agent_reply=ai_reply,
+        situation="deal" if success else "no_deal",
+        tone="friendly",
+    )
+    update_deal_outcome(log_id, outcome)
+    return log_id
+
+
 def update_deal_outcome(log_id, outcome):
     if not log_id:
         return
