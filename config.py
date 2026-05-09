@@ -26,7 +26,8 @@ ELEVENLABS_VOICE_ID = os.environ.get("ELEVENLABS_VOICE_ID", "")
 ADMIN_APPROVAL_THRESHOLD = int(os.environ.get("ADMIN_APPROVAL_THRESHOLD", 1000))
 EXCLUDED_IDS = []
 
-BUY_SPREAD_TOMAN = int(os.environ.get("BUY_SPREAD_TOMAN", 4000))
+BUY_SPREAD_TOMAN  = int(os.environ.get("BUY_SPREAD_TOMAN",  4000))
+SELL_SPREAD_TOMAN = int(os.environ.get("SELL_SPREAD_TOMAN",  500))
 
 TWILIO_ACCOUNT_SID  = os.environ.get("TWILIO_ACCOUNT_SID", "")
 TWILIO_AUTH_TOKEN   = os.environ.get("TWILIO_AUTH_TOKEN", "")

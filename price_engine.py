@@ -2,17 +2,14 @@ import time
 import sqlite3
 
 from config import (
-    MARKET_SPREAD_TOMAN,
+    BUY_SPREAD_TOMAN,
+    SELL_SPREAD_TOMAN,
     MAX_PRICE_AGE_MINUTES,
     USD_CAD_RATE,
 )
 
 DB_PATH = "/var/www/exchange_bot/exchange.db"
 
-# When a channel only posts sell price, estimate buy price using this gap
-DEFAULT_BUY_GAP = 4000
-
-# Amounts at or above this require manager sign-off
 MANAGER_LIMIT = 5000
 
 
@@ -31,31 +28,33 @@ def init_price_db():
             created_at   INTEGER
         )
     """)
-    # Add confidence column to existing tables that pre-date this schema
     try:
         cur.execute("ALTER TABLE market_prices ADD COLUMN confidence REAL DEFAULT 1.0")
     except Exception:
         pass
     cur.execute("""
         CREATE TABLE IF NOT EXISTS current_rates (
-            currency   TEXT PRIMARY KEY,
-            best_sell  INTEGER,
-            best_buy   INTEGER,
-            our_sell   INTEGER,
-            our_buy    INTEGER,
-            updated_at INTEGER
+            currency    TEXT PRIMARY KEY,
+            raw_source  INTEGER,
+            our_sell    INTEGER,
+            our_buy     INTEGER,
+            updated_at  INTEGER
         )
     """)
+    # Migrate old schema (best_sell/best_buy columns) if needed
+    try:
+        cur.execute("ALTER TABLE current_rates ADD COLUMN raw_source INTEGER")
+    except Exception:
+        pass
     conn.commit()
     conn.close()
 
 
 def get_margin_by_amount(amount):
-    """Negotiation wiggle-room (toman) communicated to the AI — not shown to customer."""
     try:
         amount = float(amount)
     except Exception:
-        return 100
+        return 0
     if amount < 1000:
         return 100
     if amount < 2000:
@@ -82,8 +81,6 @@ def save_market_price(
     message_date=None, confidence=1.0
 ):
     init_price_db()
-    if sell_price and not buy_price:
-        buy_price = int(sell_price) - DEFAULT_BUY_GAP
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     cur.execute("""
@@ -103,11 +100,10 @@ def save_market_price(
     conn.close()
 
 
-def _get_direct_base(currency):
+def _get_avg_sell(currency):
     """
-    Average sell and buy prices from fresh channel data for `currency`.
-    Fresh = within MAX_PRICE_AGE_MINUTES. Rejects low-confidence entries.
-    Returns None if not enough data.
+    Returns the average sell price from fresh channel data for `currency`.
+    Fresh = within MAX_PRICE_AGE_MINUTES. Returns None if no data.
     """
     init_price_db()
     now = int(time.time())
@@ -115,91 +111,100 @@ def _get_direct_base(currency):
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     cur.execute("""
-        SELECT sell_price, buy_price, confidence FROM market_prices
+        SELECT sell_price FROM market_prices
         WHERE currency = ?
           AND created_at >= ?
+          AND sell_price IS NOT NULL
           AND confidence >= 0.5
     """, (currency, now - max_age))
     rows = cur.fetchall()
     conn.close()
-
-    sells = [r[0] for r in rows if r[0]]
-    buys  = [r[1] for r in rows if r[1]]
-
-    if not sells and not buys:
+    if not rows:
         return None
-
-    avg_sell = int(sum(sells) / len(sells)) if sells else None
-    avg_buy  = int(sum(buys)  / len(buys))  if buys  else None
-
-    return {"avg_sell": avg_sell, "avg_buy": avg_buy}
+    return int(sum(r[0] for r in rows) / len(rows))
 
 
 def get_market_base(currency):
     """
-    Returns average market sell/buy for the given currency.
-    For CAD: tries direct prices first, then derives from USDT/USD.
+    Returns {"ref_price": int} — the single market reference price for a currency.
+    USD falls back to USDT when no fresh Tehran data.
+    CAD is derived from USDT when no direct CAD data.
+    Returns None when no live data is available.
     """
-    if currency == "CAD":
-        direct = _get_direct_base("CAD")
-        if direct:
-            return direct
-        # Derive from USDT (preferred) or USD
-        usd_base = _get_direct_base("USDT") or _get_direct_base("USD")
-        if usd_base:
-            sell = int(usd_base["avg_sell"] / USD_CAD_RATE) if usd_base.get("avg_sell") else None
-            buy  = int(usd_base["avg_buy"]  / USD_CAD_RATE) if usd_base.get("avg_buy")  else None
-            return {"avg_sell": sell, "avg_buy": buy}
+    if currency == "USD":
+        ref = _get_avg_sell("USD")
+        if ref:
+            return {"ref_price": ref, "source": "USD"}
+        # Fall back to USDT (1 USDT ≈ 1 USD in toman terms)
+        ref = _get_avg_sell("USDT")
+        if ref:
+            return {"ref_price": ref, "source": "USDT→USD"}
         return None
 
-    return _get_direct_base(currency)
+    if currency == "USDT":
+        ref = _get_avg_sell("USDT")
+        return {"ref_price": ref, "source": "USDT"} if ref else None
+
+    if currency == "CAD":
+        ref = _get_avg_sell("CAD")
+        if ref:
+            return {"ref_price": ref, "source": "CAD"}
+        # Derive from USDT
+        ref = _get_avg_sell("USDT")
+        if ref:
+            return {"ref_price": int(ref / USD_CAD_RATE), "source": "USDT→CAD"}
+        return None
+
+    ref = _get_avg_sell(currency)
+    return {"ref_price": ref, "source": currency} if ref else None
 
 
-def calculate_rate(currency, amount):
+def calculate_rate(currency, amount=100):
     """
-    our_sell = avg_market_sell - MARKET_SPREAD_TOMAN   (we sell cheaper → attract buyers)
-    our_buy  = avg_market_buy  + MARKET_SPREAD_TOMAN   (we buy more → attract sellers)
-    Returns None if no fresh market data — never invents prices.
+    ref_price  = avg market sell price from channels
+    our_sell   = ref_price - SELL_SPREAD_TOMAN  (we sell to customer, cheaper than market)
+    our_buy    = ref_price - BUY_SPREAD_TOMAN   (we buy from customer, our profit margin)
+
+    Returns None if no live data — never invents prices.
     """
     base = get_market_base(currency)
     if not base:
         return None
 
-    avg_sell = base["avg_sell"]
-    avg_buy  = base["avg_buy"]
+    ref   = base["ref_price"]
+    our_sell = ref - SELL_SPREAD_TOMAN
+    our_buy  = ref - BUY_SPREAD_TOMAN
     margin   = get_margin_by_amount(amount)
 
-    our_sell = (avg_sell - MARKET_SPREAD_TOMAN) if avg_sell else None
-    our_buy  = (avg_buy  + MARKET_SPREAD_TOMAN) if avg_buy  else None
-
+    init_price_db()
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     cur.execute("""
         INSERT OR REPLACE INTO current_rates
-            (currency, best_sell, best_buy, our_sell, our_buy, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?)
-    """, (currency, avg_sell, avg_buy, our_sell, our_buy, int(time.time())))
+            (currency, raw_source, our_sell, our_buy, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+    """, (currency, ref, our_sell, our_buy, int(time.time())))
     conn.commit()
     conn.close()
 
     return {
-        "currency": currency,
-        "amount":   amount,
-        "margin":   margin,
-        "avg_sell": avg_sell,
-        "avg_buy":  avg_buy,
-        "our_sell": our_sell,
-        "our_buy":  our_buy,
+        "currency":  currency,
+        "amount":    amount,
+        "margin":    margin,
+        "raw_source": ref,
+        "source_label": base["source"],
+        "our_sell":  our_sell,
+        "our_buy":   our_buy,
     }
 
 
 def calculate_customer_price(currency, amount, deal_type):
     """
     deal_type:
-      buyer  → customer buys from us  → we show our_sell
-      seller → customer sells to us   → we show our_buy
+      buyer  → customer buys from us  → they pay our_sell
+      seller → customer sells to us   → they receive our_buy
 
-    Returns None when no live data exists (never returns a fake price).
+    Returns None when no live data.
     Returns {"manager_required": True} for amounts >= MANAGER_LIMIT.
     """
     if should_send_to_manager(amount):
@@ -209,19 +214,14 @@ def calculate_customer_price(currency, amount, deal_type):
     if not rate:
         return None
 
-    if deal_type == "buyer":
-        price = rate["our_sell"]
-    elif deal_type == "seller":
-        price = rate["our_buy"]
-    else:
-        return None
-
+    price = rate["our_sell"] if deal_type == "buyer" else rate["our_buy"] if deal_type == "seller" else None
     if price is None:
         return None
 
     return {
         "manager_required": False,
-        "price":  price,
-        "margin": rate["margin"],
-        "rate":   rate,
+        "price":       price,
+        "margin":      rate["margin"],
+        "raw_source":  rate["raw_source"],
+        "rate":        rate,
     }
