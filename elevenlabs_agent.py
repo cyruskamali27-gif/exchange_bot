@@ -147,11 +147,14 @@ async def _run_conversation(ws, uid: int, user_text: str) -> str:
         elif mtype == "agent_response":
             # text lives at different paths depending on SDK version
             ar = msg.get("agent_response_event") or msg.get("agent_response") or {}
-            agent_reply = (
+            raw_text = (
                 ar.get("agent_response")
                 or ar.get("text")
                 or msg.get("text", "")
             )
+            # Strip stage-direction brackets like [گرم و صمیمی] from text replies
+            import re as _re
+            agent_reply = _re.sub(r"^\s*\[[^\]]*\]\s*", "", raw_text).strip()
             log.debug("uid=%s agent_response: %s", uid, agent_reply[:80])
             break  # got what we need
 
