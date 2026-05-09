@@ -12,7 +12,8 @@ from config import (
     VOICE_REPLIES_ENABLED,
     TEST_GROUP_ONLY, TEST_GROUP_ID,
 )
-from negotiation_agent import send_intro_message, process_message, conversations
+from negotiation_agent import send_intro_message
+from elevenlabs_agent import chat as elevenlabs_chat, get_live_rate_text
 from contacted_users import is_contacted, add as add_contacted
 from voice_agent import voice_to_text, send_voice_message
 from natural_replies import get_reply
@@ -121,15 +122,13 @@ async def _handle_message(client, uid, text, customer_sent_voice=False):
     price_req = is_price_request(text)
     use_voice = _resolve_voice(uid, customer_sent_voice, price_req)
 
-    conv = conversations.get(uid, {"type": "buyer", "amount": 10, "currency": "CAD"})
-    detected_cur = detect_currency(text)
-    if detected_cur != "CAD" or "currency" not in conv:
-        conv["currency"] = detected_cur
+    if price_req:
+        detected_cur = detect_currency(text)
+        cur = detected_cur if detected_cur != "CAD" else None
+        reply = await get_live_rate_text(cur)
+    else:
+        reply = await elevenlabs_chat(uid, text)
 
-    reply = await process_message(
-        client, uid, "user", text, conv["type"], conv["amount"],
-        is_price_request=price_req,
-    )
     return reply, use_voice
 
 

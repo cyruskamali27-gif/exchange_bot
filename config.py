@@ -29,6 +29,9 @@ EXCLUDED_IDS = []
 BUY_SPREAD_TOMAN  = int(os.environ.get("BUY_SPREAD_TOMAN",  4000))
 SELL_SPREAD_TOMAN = int(os.environ.get("SELL_SPREAD_TOMAN",  500))
 
+# ─── ElevenLabs Conversational AI ────────────────────────────────
+ELEVENLABS_AGENT_ID = os.environ.get("ELEVENLABS_AGENT_ID", "agent_1101kr77twbhe1p9c7mpf1b7z2e3")
+
 # ─── Office ambience mixing ───────────────────────────────────────
 ENABLE_OFFICE_AMBIENCE  = os.environ.get("ENABLE_OFFICE_AMBIENCE", "true").lower() == "true"
 OFFICE_AMBIENCE_FILE    = os.environ.get("OFFICE_AMBIENCE_FILE", "/var/www/exchange_bot/assets/office_ambience.mp3")
