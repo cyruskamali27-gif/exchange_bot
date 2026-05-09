@@ -10,6 +10,7 @@ from config import (
     TELETHON_API_ID, TELETHON_API_HASH, TELETHON_PHONE,
     ADMIN_ID, BOT_TOKEN, EXCLUDED_IDS,
     VOICE_REPLIES_ENABLED, PRICE_REPLIES_ALWAYS_TEXT,
+    TEST_GROUP_ONLY, TEST_GROUP_ID,
 )
 from negotiation_agent import send_intro_message, process_message, conversations
 from contacted_users import is_contacted, add as add_contacted
@@ -28,24 +29,21 @@ _PRICE_KEYWORDS = [
 
 
 def is_price_request(text):
-    """True when the message is primarily a rate/price inquiry (no buy/sell intent)."""
     if not text:
         return False
     t = text.lower()
     has_price_word = any(k in t for k in _PRICE_KEYWORDS)
     has_deal_word  = any(k in t for k in ["خرید", "فروش", "buy", "sell"])
-    # Pure price query: has price keyword but no deal action
     return has_price_word and not has_deal_word
 
 
 def detect_currency(text):
-    """Detect which currency the customer is asking about."""
     t = text.lower()
     if any(k in t for k in ["تتر", "usdt"]):
         return "USDT"
     if any(k in t for k in ["آمریکا", "امریکا", " usd"]):
         return "USD"
-    return "CAD"  # default
+    return "CAD"
 
 
 def extract_amount(text):
@@ -66,13 +64,81 @@ def detect_type(text):
     return None
 
 
+async def _handle_message(client, uid, text, customer_sent_voice=False):
+    """Core message handler — shared by both private and test-group paths."""
+    last_message_time[uid] = time.time()
+
+    price_req = is_price_request(text)
+    if PRICE_REPLIES_ALWAYS_TEXT and price_req:
+        use_voice = False
+    elif customer_sent_voice and VOICE_REPLIES_ENABLED:
+        use_voice = True
+    else:
+        use_voice = False
+
+    conv = conversations.get(uid, {"type": "buyer", "amount": 10, "currency": "CAD"})
+    detected_cur = detect_currency(text)
+    if detected_cur != "CAD" or "currency" not in conv:
+        conv["currency"] = detected_cur
+
+    reply = await process_message(client, uid, "user", text, conv["type"], conv["amount"])
+    return reply, use_voice
+
+
 async def run():
     client = TelegramClient('exchange_agent', TELETHON_API_ID, TELETHON_API_HASH)
     await client.start(phone=TELETHON_PHONE)
+
+    if TEST_GROUP_ONLY:
+        print(f"⚠️  TEST_GROUP_ONLY=true — فقط گروه تست ({TEST_GROUP_ID}) فعال است")
+        print("   پیام‌های خصوصی و سایر گروه‌ها نادیده گرفته می‌شوند")
     print("✅ Scanner running...")
 
+    # ── Test-group conversation handler ──────────────────────────
+    # Runs the FULL pipeline (Gemini + pricing + voice) but only
+    # inside the designated test group.
+    @client.on(events.NewMessage(chats=[TEST_GROUP_ID], incoming=True))
+    async def test_group_handler(event):
+        if event.out:
+            return
+
+        sender = await event.get_sender()
+        uid = sender.id
+
+        if uid in EXCLUDED_IDS:
+            return
+
+        customer_sent_voice = False
+
+        if event.message.voice:
+            customer_sent_voice = True
+            audio = await event.download_media(bytes)
+            text  = await voice_to_text(audio)
+            if not text:
+                await event.respond("نشنیدم، دوباره بگو.")
+                return
+        else:
+            text = event.message.message or ""
+
+        if not text or len(text) < 2:
+            return
+
+        reply, use_voice = await _handle_message(client, uid, text, customer_sent_voice)
+
+        if use_voice:
+            ok = await send_voice_message(client, TEST_GROUP_ID, reply)
+            if not ok:
+                await event.respond(reply)
+        else:
+            await event.respond(reply)
+
+    # ── Production group scanner (outreach to new leads) ─────────
+    # Disabled entirely when TEST_GROUP_ONLY=true.
     @client.on(events.NewMessage)
     async def group_handler(event):
+        if TEST_GROUP_ONLY:
+            return  # all outreach disabled in test mode
+
         if event.out or event.is_private:
             return
 
@@ -106,8 +172,13 @@ async def run():
             parse_mode="Markdown"
         )
 
+    # ── Private chat handler ──────────────────────────────────────
+    # Disabled entirely when TEST_GROUP_ONLY=true.
     @client.on(events.NewMessage(incoming=True))
     async def private_handler(event):
+        if TEST_GROUP_ONLY:
+            return  # no private chat replies in test mode
+
         if event.out or not event.is_private:
             return
 
@@ -132,23 +203,7 @@ async def run():
         if not text:
             return
 
-        last_message_time[uid] = time.time()
-
-        # Decide reply mode
-        price_req = is_price_request(text)
-        if PRICE_REPLIES_ALWAYS_TEXT and price_req:
-            use_voice = False   # price quotes always in text
-        elif customer_sent_voice and VOICE_REPLIES_ENABLED:
-            use_voice = True    # mirror voice only if voice accent is enabled
-        else:
-            use_voice = False   # text in → text out (default)
-
-        conv = conversations.get(uid, {"type": "buyer", "amount": 10, "currency": "CAD"})
-        # Update detected currency if customer mentioned one
-        detected_cur = detect_currency(text)
-        if detected_cur != "CAD" or "currency" not in conv:
-            conv["currency"] = detected_cur
-        reply = await process_message(client, uid, "user", text, conv["type"], conv["amount"])
+        reply, use_voice = await _handle_message(client, uid, text, customer_sent_voice)
 
         if use_voice:
             ok = await send_voice_message(client, uid, reply)
