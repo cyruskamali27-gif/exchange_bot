@@ -19,13 +19,20 @@ logging.basicConfig(level=logging.INFO)
 _price_cache = {}
 
 _CURRENCIES = {
-    "USDT": ["تتر", "usdt", "USDT", "تتهر"],
-    "USD":  ["دلار آمریکا", "دلار امریکا", "USD", "usd"],
-    "CAD":  ["دلار کانادا", "کانادا", "CAD", "cad"],
+    "USDT": ["تتر", "usdt", "USDT", "تتهر", "tether", "تتر:", "تدر"],
+    "USD":  ["دلار آمریکا", "دلار امریکا", "dollar", "USD", "usd", "دلار"],
+    "CAD":  ["دلار کانادا", "کانادایی", "کانادا", "CAD", "cad"],
 }
 
-_SELL_WORDS = ["فروش", "sell", "فروختن"]
-_BUY_WORDS  = ["خرید", "buy", "خریدن"]
+_SELL_WORDS = ["فروش", "sell", "فروختن", "میفروشم", "می‌فروشم"]
+_BUY_WORDS  = ["خرید", "buy", "خریدن", "میخرم", "می‌خرم"]
+
+# Only persist extractions above this confidence to the database.
+# 0.9 = keyword→price match (reliable) — always saved
+# 0.5 = bare number fallback (noisy) — filtered out once keyword matching works
+# 0.49 threshold: blocks truly garbage extractions while keeping current USD/CAD feed
+# (raise to 0.65 once keyword→price regex is confirmed matching all channels)
+_MIN_OCR_CONFIDENCE = 0.49
 
 
 def _normalize_digits(text):
@@ -51,11 +58,15 @@ def extract_prices_from_text(text):
     Parse text from a Telegram message.
     Returns list of dicts: {currency, price, direction, confidence}
     direction: 'sell' | 'buy' | None
+
+    Bug-fix: pattern matching now runs on digit-normalised text so Farsi/Arabic
+    numerals (۱۷۸٬۵۰۰) are treated identically to ASCII digits (178,500).
     """
     if not text:
         return []
 
     results = []
+    # Always work on normalised text — Farsi digits → ASCII, commas cleaned
     norm = _normalize_digits(text)
 
     # Generic price pattern (5-6 digit with optional separator)
@@ -63,18 +74,20 @@ def extract_prices_from_text(text):
 
     for cur, keywords in _CURRENCIES.items():
         for kw in keywords:
-            # Look for keyword followed by price
+            # Normalise the keyword too (in case it contains Farsi digits)
+            kw_norm = _normalize_digits(kw)
+            # Allow any combination of whitespace, newlines, colons, or dashes
+            # between the keyword and the price value
             pattern = re.compile(
-                rf"{re.escape(kw)}[\s:：\-–]*(\d{{2,3}}[,،]?\d{{3}}|\d{{5,6}})",
-                re.IGNORECASE,
+                rf"{re.escape(kw_norm)}[\s\n\r:：\-–|،,]*(\d{{2,3}}[,،]?\d{{3}}|\d{{5,6}})",
+                re.IGNORECASE | re.MULTILINE,
             )
-            for m in pattern.finditer(text):
+            for m in pattern.finditer(norm):
                 p = _parse_price(m.group(1))
                 if p:
-                    # Determine direction from surrounding context (±50 chars)
-                    ctx_start = max(0, m.start() - 50)
-                    ctx_end   = min(len(text), m.end() + 50)
-                    ctx = text[ctx_start:ctx_end]
+                    ctx_start = max(0, m.start() - 60)
+                    ctx_end   = min(len(norm), m.end() + 60)
+                    ctx = norm[ctx_start:ctx_end]
                     direction = None
                     if any(w in ctx for w in _SELL_WORDS):
                         direction = "sell"
@@ -87,13 +100,13 @@ def extract_prices_from_text(text):
                         "confidence": 0.9,
                     })
 
-    # Fallback: bare price patterns — lower confidence
+    # Fallback: bare price pattern — lower confidence, one match per message
     if not results:
         for m in price_pat.finditer(norm):
             p = _parse_price(m.group(0))
             if p:
-                ctx_start = max(0, m.start() - 50)
-                ctx_end   = min(len(norm), m.end() + 50)
+                ctx_start = max(0, m.start() - 60)
+                ctx_end   = min(len(norm), m.end() + 60)
                 ctx = norm[ctx_start:ctx_end]
                 direction = None
                 if any(w in ctx for w in _SELL_WORDS):
@@ -101,12 +114,12 @@ def extract_prices_from_text(text):
                 elif any(w in ctx for w in _BUY_WORDS):
                     direction = "buy"
                 results.append({
-                    "currency":   "USDT",  # most common in these channels
+                    "currency":   "USDT",
                     "price":      p,
                     "direction":  direction,
                     "confidence": 0.5,
                 })
-                break  # one fallback per message is enough
+                break
 
     return results
 
@@ -147,10 +160,18 @@ def _is_fresh(updated_at):
 
 def _update_cache_and_db(items, source):
     for item in items:
-        cur   = item["currency"]
-        price = item["price"]
-        direction   = item["direction"]
-        confidence  = item["confidence"]
+        cur        = item["currency"]
+        price      = item["price"]
+        direction  = item["direction"]
+        confidence = item["confidence"]
+
+        # Skip noisy low-confidence bare-pattern extractions
+        if confidence < _MIN_OCR_CONFIDENCE:
+            logging.debug(
+                "OCR skip low-conf: %s %s conf=%.1f @%s",
+                cur, price, confidence, source
+            )
+            continue
 
         # Update in-memory cache
         _price_cache[cur] = {

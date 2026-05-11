@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import sqlite3
+import time as _time
 from collections import Counter
 from datetime import datetime
 
@@ -166,16 +167,28 @@ def get_emotional_fingerprint(uid: int) -> dict:
 
 # ─── Hume AI enrichment (background) ─────────────────────────────────────────
 
+_hume_rate_limit_until: float = 0.0
+_HUME_COOLDOWN_S = 300  # 5-minute cooldown after any rate-limit or auth error
+
+
 async def _hume_enrich(uid: int, text: str, base: dict, conv_id: int = None):
-    """Run Hume AI batch inference in background. Updates DB on completion."""
+    """
+    Run Hume AI batch inference in background. Updates DB on completion.
+    Skips silently during cooldown. Never crashes the calling coroutine.
+    """
+    global _hume_rate_limit_until
+
     if not ENABLE_HUME_EMOTION or not HUME_API_KEY:
+        return
+    if _time.time() < _hume_rate_limit_until:
+        log.debug("Hume in cooldown (%.0f s left), skipping uid=%s",
+                  _hume_rate_limit_until - _time.time(), uid)
         return
 
     def _call():
         try:
             from hume import HumeClient
             from hume.expression_measurement.batch import Models, Language
-            import time
 
             client  = HumeClient(api_key=HUME_API_KEY)
             job     = client.expression_measurement.batch.start_inference_job(
@@ -184,27 +197,26 @@ async def _hume_enrich(uid: int, text: str, base: dict, conv_id: int = None):
             )
             # Poll max 12 s
             for _ in range(24):
-                time.sleep(0.5)
+                _time.sleep(0.5)
                 details = client.expression_measurement.batch.get_job_details(id=job.job_id)
-                if details.state.status.value == "COMPLETED":
-                    preds = client.expression_measurement.batch.get_job_predictions(id=job.job_id)
-                    return preds
-                if details.state.status.value == "FAILED":
+                status  = details.state.status.value
+                if status == "COMPLETED":
+                    return client.expression_measurement.batch.get_job_predictions(id=job.job_id)
+                if status == "FAILED":
                     return None
             return None
         except Exception as e:
-            log.debug("Hume call error: %s", e)
-            return None
+            log.debug("Hume _call error: %s", e)
+            raise   # re-raise so the outer handler can inspect
 
     try:
-        predictions = await asyncio.wait_for(asyncio.to_thread(_call), timeout=15)
+        predictions = await asyncio.wait_for(asyncio.to_thread(_call), timeout=20)
         if not predictions:
             return
 
         enriched = base.copy()
         enriched["source"] = "hume_ai"
 
-        # Map Hume emotions → our scores
         for pred in predictions:
             try:
                 results = pred.results.predictions
@@ -231,9 +243,14 @@ async def _hume_enrich(uid: int, text: str, base: dict, conv_id: int = None):
         log.debug("Hume enriched uid=%s emotion=%s", uid, enriched["dominant_emotion"])
 
     except asyncio.TimeoutError:
-        log.debug("Hume timeout for uid=%s", uid)
+        log.debug("Hume timeout uid=%s", uid)
     except Exception as e:
-        log.error("Hume enrichment error: %s", e)
+        err = str(e).lower()
+        if any(k in err for k in ("429", "rate", "limit", "quota", "unauthorized", "403")):
+            _hume_rate_limit_until = _time.time() + _HUME_COOLDOWN_S
+            log.warning("Hume rate-limited/auth error — cooldown %ds | %s", _HUME_COOLDOWN_S, e)
+        else:
+            log.error("Hume enrichment error uid=%s: %s", uid, e)
 
 
 # ─── Main entry point ─────────────────────────────────────────────────────────

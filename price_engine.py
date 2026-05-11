@@ -1,3 +1,6 @@
+import json
+import logging
+import os
 import time
 import sqlite3
 
@@ -8,9 +11,86 @@ from config import (
     USD_CAD_RATE,
 )
 
-DB_PATH = "/var/www/exchange_bot/exchange.db"
+log = logging.getLogger("price_engine")
+CURRENT_PRICE_JSON = "/var/www/exchange_bot/current_price.json"
 
+DB_PATH = "/var/www/exchange_bot/exchange.db"
 MANAGER_LIMIT = 5000
+
+
+# ─── JSON price cache helpers ─────────────────────────────────────────────────
+
+def _write_price_json(currency: str, ref: int, our_sell: int, our_buy: int):
+    """Persist current rate to JSON so exchange_brain can fall back to it offline."""
+    try:
+        try:
+            with open(CURRENT_PRICE_JSON) as f:
+                data = json.load(f)
+        except Exception:
+            data = {}
+        data[currency] = {
+            "price":      ref,
+            "our_sell":   our_sell,
+            "our_buy":    our_buy,
+            "updated_at": int(time.time()),
+        }
+        with open(CURRENT_PRICE_JSON, "w") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        log.warning("price JSON write error: %s", e)
+
+
+def init_price_json():
+    """
+    Merge current_rates DB into current_price.json on startup.
+    Adds any currencies missing from the file without overwriting fresh prices
+    already tracked by the price_monitor.  Safe to call multiple times.
+    """
+    # Load whatever is already in the file (may be empty or partial)
+    existing: dict = {}
+    try:
+        if os.path.exists(CURRENT_PRICE_JSON):
+            with open(CURRENT_PRICE_JSON) as f:
+                existing = json.load(f) or {}
+    except Exception:
+        existing = {}
+
+    # Pull all rows from current_rates
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        rows = conn.execute(
+            "SELECT currency, raw_source, our_sell, our_buy FROM current_rates"
+        ).fetchall()
+        conn.close()
+    except Exception as e:
+        log.warning("init_price_json DB error: %s", e)
+        return
+
+    added = []
+    for currency, ref, our_sell, our_buy in rows:
+        if not ref:
+            continue
+        if currency not in existing:
+            # Only add currencies not already tracked by price_monitor
+            existing[currency] = {
+                "price":      ref,
+                "our_sell":   our_sell,
+                "our_buy":    our_buy,
+                "updated_at": int(time.time()),
+            }
+            added.append(currency)
+
+    if added:
+        try:
+            with open(CURRENT_PRICE_JSON, "w") as f:
+                json.dump(existing, f, ensure_ascii=False, indent=2)
+            log.info("price JSON: added %s from DB", added)
+        except Exception as e:
+            log.warning("init_price_json write error: %s", e)
+
+
+# Seed on module load so any importer gets a valid JSON immediately
+init_price_json()
 
 
 def init_price_db():
@@ -186,6 +266,9 @@ def calculate_rate(currency, amount=100):
     """, (currency, ref, our_sell, our_buy, int(time.time())))
     conn.commit()
     conn.close()
+
+    # Always keep JSON backup in sync with DB
+    _write_price_json(currency, ref, our_sell, our_buy)
 
     return {
         "currency":  currency,

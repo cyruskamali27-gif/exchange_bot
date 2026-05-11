@@ -19,6 +19,9 @@ from agent_memory import (
 from exchange_brain import save_learned_mistake
 import sqlite3
 
+# admin_id → log_id: tracks when admin pressed ✏️ and needs to type a correction
+_awaiting_correction: dict[int, int] = {}
+
 DB_FILE = "/var/www/exchange_bot/exchange.db"
 
 logging.basicConfig(level=logging.INFO)
@@ -420,6 +423,63 @@ async def show_customer_profiles(update, context):
     )
 
 
+# ─── Learning helpers ────────────────────────────────────────────────────────
+
+def _get_log_entry(log_id: int) -> dict | None:
+    """Fetch agent_reply + customer_message from agent_learning_log."""
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        row = conn.execute(
+            "SELECT agent_reply, customer_message, tone FROM agent_learning_log WHERE id=?",
+            (log_id,)
+        ).fetchone()
+        conn.close()
+        if row:
+            return {"reply": row[0] or "", "message": row[1] or "", "tone": row[2] or "neutral"}
+    except Exception as e:
+        logging.error("_get_log_entry: %s", e)
+    return None
+
+
+def _save_to_successful_patterns(log_id: int):
+    entry = _get_log_entry(log_id)
+    if not entry or not entry["reply"]:
+        return
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        conn.execute(
+            """INSERT INTO successful_patterns (pattern_text, success_count, customer_mood, last_used)
+               VALUES (?,1,?,?)
+               ON CONFLICT(pattern_text) DO UPDATE SET
+                 success_count=success_count+1, last_used=excluded.last_used""",
+            (entry["reply"][:300], entry["tone"], datetime.now().isoformat())
+        )
+        conn.commit()
+        conn.close()
+        logging.info("Successful pattern saved (log_id=%s)", log_id)
+    except Exception as e:
+        logging.error("_save_to_successful_patterns: %s", e)
+
+
+def _save_to_learned_mistakes(log_id: int, mistake_type: str, corrected: str | None = None):
+    entry = _get_log_entry(log_id)
+    if not entry or not entry["reply"]:
+        return
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        conn.execute(
+            """INSERT INTO learned_mistakes
+               (mistake_type, original_reply, corrected_reply, admin_id, created_at)
+               VALUES (?,?,?,?,?)""",
+            (mistake_type, entry["reply"][:500], corrected, "admin", datetime.now().isoformat())
+        )
+        conn.commit()
+        conn.close()
+        logging.info("Learned mistake saved (log_id=%s type=%s)", log_id, mistake_type)
+    except Exception as e:
+        logging.error("_save_to_learned_mistakes: %s", e)
+
+
 # ─── Feedback Handler ────────────────────────────────────────────────────────
 
 async def handle_feedback(update, context, data):
@@ -429,6 +489,30 @@ async def handle_feedback(update, context, data):
         await update.callback_query.answer("خطا در پردازش")
         return
     _, fb_type, log_id_str = parts
+
+    # ── Correction mode: admin presses ✏️ ────────────────────────────
+    if fb_type == "correct":
+        try:
+            log_id = int(log_id_str)
+            _awaiting_correction[update.effective_user.id] = log_id
+            await update.callback_query.answer("پاسخ صحیح را تایپ کنید")
+            entry = _get_log_entry(log_id)
+            original = entry["reply"][:120] if entry else "—"
+            await context.bot.send_message(
+                chat_id=update.effective_user.id,
+                text=(
+                    f"✏️ تصحیح لاگ #{log_id}\n"
+                    f"━━━━━━━━━━━━━━━━━━\n"
+                    f"❌ پاسخ اشتباه:\n{original}\n"
+                    f"━━━━━━━━━━━━━━━━━━\n"
+                    f"✅ پاسخ صحیح را تایپ کنید:"
+                )
+            )
+        except Exception as e:
+            await update.callback_query.answer("خطا")
+            logging.error("correction setup: %s", e)
+        return
+
     try:
         log_id = int(log_id_str)
     except ValueError:
@@ -446,6 +530,12 @@ async def handle_feedback(update, context, data):
     }
     feedback_type = feedback_map.get(fb_type, fb_type)
     save_admin_feedback(log_id, "admin", feedback_type)
+
+    # ── Wire feedback into learning tables ────────────────────────────
+    if feedback_type in ("good_reply", "deal_successful"):
+        _save_to_successful_patterns(log_id)
+    elif feedback_type in ("bad_reply", "too_robotic", "wrong_price"):
+        _save_to_learned_mistakes(log_id, feedback_type)
 
     label = FEEDBACK_LABELS.get(fb_type, feedback_type)
     await update.callback_query.answer(f"ثبت شد: {label}")
@@ -484,6 +574,27 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
+    admin_id = update.effective_user.id
+
+    # ── Correction flow: admin typed the corrected reply ─────────────
+    if admin_id in _awaiting_correction:
+        log_id = _awaiting_correction.pop(admin_id)
+        corrected = (update.message.text or "").strip()
+        if corrected:
+            entry = _get_log_entry(log_id)
+            original = entry["reply"] if entry else ""
+            _save_to_learned_mistakes(log_id, "admin_correction", corrected)
+            await update.message.reply_text(
+                f"✅ تصحیح ذخیره شد\n"
+                f"━━━━━━━━━━━━━━━━━━\n"
+                f"❌ {original[:100]}\n"
+                f"✅ {corrected[:100]}"
+            )
+        else:
+            await update.message.reply_text("تصحیح لغو شد.")
+        return
+
+    # ── Numeric CAD → price lookup ────────────────────────────────────
     try:
         amount = float(update.message.text.replace(",", "").replace(" ", ""))
         result = calculate_rate("CAD", amount)
@@ -497,6 +608,49 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         pass
     await update.message.reply_text("برای دیدن پنل: /start")
+
+
+# ─── Go-Live Command ─────────────────────────────────────────────────────────
+
+async def cmd_go_live(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/go_live — disable TEST_GROUP_ONLY and enable full production routing."""
+    if not is_admin(update.effective_user.id):
+        return
+
+    env_path = "/var/www/exchange_bot/.env"
+    try:
+        with open(env_path) as f:
+            lines = f.readlines()
+
+        changes = []
+        new_lines = []
+        for line in lines:
+            if line.startswith("TEST_GROUP_ONLY="):
+                new_lines.append("TEST_GROUP_ONLY=false\n")
+                changes.append("TEST_GROUP_ONLY=false")
+            elif line.startswith("SAFE_MODE="):
+                new_lines.append("SAFE_MODE=false\n")
+                changes.append("SAFE_MODE=false")
+            else:
+                new_lines.append(line)
+
+        with open(env_path, "w") as f:
+            f.writelines(new_lines)
+
+        await update.message.reply_text(
+            "🚀 حالت تولید فعال شد!\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            + "\n".join(f"✅ {c}" for c in changes) +
+            "\n━━━━━━━━━━━━━━━━━━\n"
+            "برای فعال‌سازی کامل:\n"
+            "`pm2 restart exchange-scanner`\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            "⚠️ اسکنر را یک ساعت مانیتور کنید!\n"
+            "برای برگشت: /safemode on",
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        await update.message.reply_text(f"خطا: {e}")
 
 
 # ─── Entry Point ─────────────────────────────────────────────────────────────
@@ -514,6 +668,7 @@ def main():
     app.add_handler(CommandHandler("emotion",     cmd_emotion))
     app.add_handler(CommandHandler("vip",         cmd_vip))
     app.add_handler(CommandHandler("ban",         cmd_ban))
+    app.add_handler(CommandHandler("go_live",     cmd_go_live))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     print("🚀 پنل مدیریت شروع شد...")

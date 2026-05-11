@@ -4,7 +4,7 @@ import re
 import time
 
 from telethon import TelegramClient, events
-from telegram import Bot
+from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 
 from config import (
     TELETHON_API_ID, TELETHON_API_HASH, TELETHON_PHONE,
@@ -115,6 +115,38 @@ def _resolve_voice(uid: int, customer_sent_voice: bool, price_req: bool) -> bool
     return False
 
 
+_feedback_kb_cache: dict[int, InlineKeyboardMarkup] = {}
+
+
+def _feedback_keyboard(log_id: int) -> InlineKeyboardMarkup:
+    if log_id not in _feedback_kb_cache:
+        _feedback_kb_cache[log_id] = InlineKeyboardMarkup([[
+            InlineKeyboardButton("👍",      callback_data=f"fb_good_{log_id}"),
+            InlineKeyboardButton("👎",      callback_data=f"fb_bad_{log_id}"),
+            InlineKeyboardButton("✏️ تصحیح", callback_data=f"fb_correct_{log_id}"),
+        ]])
+    return _feedback_kb_cache[log_id]
+
+
+async def _notify_admin_reply(uid: int, name: str, text: str, reply: str, channel: str):
+    """Log turn to agent_learning_log and send admin a feedback prompt."""
+    try:
+        log_id = log_conversation(uid, text, reply, channel=channel)
+        bot = Bot(token=BOT_TOKEN)
+        label = name or str(uid)
+        await bot.send_message(
+            chat_id=ADMIN_ID,
+            text=(
+                f"💬 {label}\n"
+                f"📥 {text[:80]}\n"
+                f"🤖 {reply[:100]}"
+            ),
+            reply_markup=_feedback_keyboard(log_id),
+        )
+    except Exception as e:
+        logging.warning("Admin notify error: %s", e)
+
+
 async def _handle_message(client, uid, text, customer_sent_voice=False, sender_name=""):
     """Core message handler — delegates all logic to exchange_brain."""
     last_message_time[uid] = time.time()
@@ -132,6 +164,11 @@ async def run():
         print(f"⚠️  TEST_GROUP_ONLY=true — فقط گروه تست ({TEST_GROUP_ID}) فعال است")
         print("   پیام‌های خصوصی و سایر گروه‌ها نادیده گرفته می‌شوند")
     print("✅ Scanner running...")
+
+    # ── Debug: log ALL messages including outgoing (temporary) ───────
+    @client.on(events.NewMessage)
+    async def debug_all(event):
+        print(f"[DEBUG] out={event.out} chat_id={event.chat_id} text={repr((event.text or '')[:40])}")
 
     # ── Test-group conversation handler ──────────────────────────
     @client.on(events.NewMessage(chats=[TEST_GROUP_ID], incoming=True))
@@ -169,6 +206,9 @@ async def run():
                 await event.respond(reply)
         else:
             await event.respond(reply)
+
+        channel = "voice" if customer_sent_voice else "text"
+        await _notify_admin_reply(uid, sender_name, text, reply, channel)
 
     # ── Production group scanner (outreach to new leads) ─────────
     @client.on(events.NewMessage)
@@ -248,6 +288,9 @@ async def run():
                 await client.send_message(uid, reply)
         else:
             await client.send_message(uid, reply)
+
+        channel = "voice" if customer_sent_voice else "text"
+        await _notify_admin_reply(uid, sender_name, text, reply, channel)
 
     await client.run_until_disconnected()
 
