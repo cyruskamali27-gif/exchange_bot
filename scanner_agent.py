@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import logging
 import re
 import time
@@ -19,15 +20,28 @@ from voice_agent import voice_to_text, send_voice_message
 from natural_replies import get_reply
 from agent_memory import log_conversation, detect_customer_tone
 
+log = logging.getLogger("scanner")
 logging.basicConfig(level=logging.INFO)
 
 last_message_time = {}
 
+# Own Telethon account ID — populated at startup, used to block self-replies
+_self_id: int | None = None
+
+# Anti-loop: MD5(reply[:80]) → timestamp, 5-minute window
+_recent_bot_replies: dict[str, float] = {}
+_LOOP_WINDOW_S = 300
+
+# Text patterns that only appear in bot/admin messages — drop immediately
+_BOT_TEXT_PATTERNS = [
+    "/start", "پنل مدیریت صرافی", "برای دیدن پنل",
+    "گزارش امروز", "پروفایل مشتریان",
+]
+
 # Tracks first message time + type per user; reset after 5 min idle
 _conv_start = {}
-_CONV_RESET_IDLE = 300  # seconds
+_CONV_RESET_IDLE = 300
 
-# Keywords that force text-only reply (rules 4)
 _PRICE_KEYWORDS = [
     "قیمت", "نرخ", "چنده", "چقدره", "چقدر",
     "rate", "price", "buy price", "sell price",
@@ -36,34 +50,7 @@ _PRICE_KEYWORDS = [
     "نرخ خرید", "نرخ فروش",
 ]
 
-# 1 minute: after this, text-started conversations switch to voice
 _VOICE_ESCALATE_SECONDS = 60
-
-
-def is_price_request(text: str) -> bool:
-    if not text:
-        return False
-    t = text.lower()
-    return any(k in t for k in _PRICE_KEYWORDS)
-
-
-def detect_currency(text):
-    t = text.lower()
-    if any(k in t for k in ["تتر", "usdt"]):
-        return "USDT"
-    if any(k in t for k in ["آمریکا", "امریکا", " usd"]):
-        return "USD"
-    return "CAD"
-
-
-def extract_amount(text):
-    nums = re.findall(r'\d+', text.replace(',', ''))
-    for n in nums:
-        v = float(n)
-        if 10 <= v <= 50000:
-            return v
-    return 10
-
 
 _MARKETPLACE_BLACKLIST = [
     "فروش ماشین", "فروش خودرو", "فروش آپارتمان", "فروش ملک", "فروش موبایل",
@@ -75,27 +62,72 @@ _MARKETPLACE_BLACKLIST = [
 ]
 
 _LEAD_KEYWORDS = [
-    # USDT
     "تتر", "usdt", "تتر میخوام", "تتر دارم",
-    # USD
     "دلار آمریکا", "دلار امریکا", "usd", "دلار فروش", "دلار خرید",
     "حواله دلار", "cash usd", "usd available",
-    # CAD
     "دلار کانادا", "cad", "کانادایی", "cash cad",
-    # Generic exchange intent
     "صرافی", "خریدار دلار", "فروش دلار", "ارز", "حواله",
 ]
 
 
+# ── Self / loop protection ────────────────────────────────────────
+
+def _is_bot_text(text: str) -> bool:
+    return any(p in (text or "") for p in _BOT_TEXT_PATTERNS)
+
+
+def _is_loop_reply(text: str) -> bool:
+    """True if we sent a very similar message in the last 5 minutes."""
+    key = hashlib.md5(text[:80].encode("utf-8", errors="replace")).hexdigest()
+    now = time.time()
+    expired = [k for k, t in list(_recent_bot_replies.items()) if now - t > _LOOP_WINDOW_S]
+    for k in expired:
+        del _recent_bot_replies[k]
+    return key in _recent_bot_replies
+
+
+def _record_bot_reply(text: str):
+    """Store reply hash so _is_loop_reply can catch it if it re-enters."""
+    key = hashlib.md5(text[:80].encode("utf-8", errors="replace")).hexdigest()
+    _recent_bot_replies[key] = time.time()
+
+
+def _should_ignore(uid: int, text: str, event) -> str | None:
+    """
+    Return a reason string if the message should be silently dropped, else None.
+    Checked before any processing in every handler.
+    """
+    if event.out:
+        return "outgoing"
+    if _self_id and uid == _self_id:
+        return "self_id"
+    if uid == ADMIN_ID:
+        return "admin_id"
+    if uid in EXCLUDED_IDS:
+        return "excluded"
+    if getattr(event.message, "via_bot_id", None):
+        return "via_bot"
+    fwd = getattr(event.message, "forward", None)
+    if fwd:
+        fwd_from = getattr(fwd, "from_id", None)
+        if fwd_from and _self_id:
+            fwd_uid = getattr(fwd_from, "user_id", None)
+            if fwd_uid == _self_id:
+                return "forwarded_self"
+    if _is_bot_text(text):
+        return "bot_text_pattern"
+    if text and _is_loop_reply(text):
+        return "loop_detected"
+    return None
+
+
+# ── Lead scoring ─────────────────────────────────────────────────
+
 def _score_lead(text: str) -> float:
-    """Score 0–1 confidence this is a currency exchange lead."""
     t = text.lower()
-    # Instantly disqualify marketplace posts
     if any(phrase in t for phrase in _MARKETPLACE_BLACKLIST):
         return 0.0
-    # Block small-dollar product prices
-    import re as _re
-    small_dollar = _re.findall(r"(\d+)\s*(?:dollar|دلار)", t)
+    small_dollar = re.findall(r"(\d+)\s*(?:dollar|دلار)", t)
     if small_dollar and all(int(n) < 200 for n in small_dollar):
         if not any(k in t for k in ["نرخ", "صرافی", "حواله", "usdt", "تتر", "کانادا"]):
             return 0.0
@@ -103,8 +135,7 @@ def _score_lead(text: str) -> float:
     for kw in _LEAD_KEYWORDS:
         if kw in t:
             score += 0.3
-    score = min(score, 1.0)
-    return score
+    return min(score, 1.0)
 
 
 def detect_type(text):
@@ -116,46 +147,16 @@ def detect_type(text):
     return None
 
 
-def _resolve_voice(uid: int, customer_sent_voice: bool, price_req: bool) -> bool:
-    """
-    Decide whether to reply with voice.
+def extract_amount(text):
+    nums = re.findall(r'\d+', text.replace(',', ''))
+    for n in nums:
+        v = float(n)
+        if 10 <= v <= 50000:
+            return v
+    return 10
 
-    Rule 1: text in  → text out
-    Rule 2: voice in → voice out
-    Rule 3: text-started convo > 60 s → voice (escalate)
-    Rule 4: price request → always text, regardless of above
-    """
-    if not VOICE_REPLIES_ENABLED:
-        return False
 
-    # Rule 4 always wins
-    if price_req:
-        return False
-
-    now = time.time()
-    start = _conv_start.get(uid)
-
-    # Reset stale conversation tracking
-    if start and (now - last_message_time.get(uid, now)) > _CONV_RESET_IDLE:
-        _conv_start.pop(uid, None)
-        start = None
-
-    # Record first message of this conversation
-    if start is None:
-        _conv_start[uid] = {"time": now, "type": "voice" if customer_sent_voice else "text"}
-        start = _conv_start[uid]
-
-    # Rule 2: voice in → voice out
-    if customer_sent_voice:
-        return True
-
-    # Rule 3: text-started convo older than 60 s → escalate to voice
-    if start["type"] == "text" and (now - start["time"]) > _VOICE_ESCALATE_SECONDS:
-        return True
-
-    # Rule 1: text in → text out
-    return False
-
+# ── Admin feedback ───────────────────────────────────────────────
 
 _feedback_kb_cache: dict[int, InlineKeyboardMarkup] = {}
 
@@ -171,7 +172,6 @@ def _feedback_keyboard(log_id: int) -> InlineKeyboardMarkup:
 
 
 async def _notify_admin_reply(uid: int, name: str, text: str, reply: str, channel: str):
-    """Log turn to agent_learning_log and send admin a feedback prompt."""
     try:
         log_id = log_conversation(uid, text, reply, channel=channel)
         bot = Bot(token=BOT_TOKEN)
@@ -186,33 +186,40 @@ async def _notify_admin_reply(uid: int, name: str, text: str, reply: str, channe
             reply_markup=_feedback_keyboard(log_id),
         )
     except Exception as e:
-        logging.warning("Admin notify error: %s", e)
+        log.warning("[SCANNER] Admin notify error: %s", e)
 
 
 async def _handle_message(client, uid, text, customer_sent_voice=False, sender_name=""):
-    """Core message handler — delegates all logic to exchange_brain."""
+    """Delegate to exchange_brain. Returns (reply, use_voice)."""
     last_message_time[uid] = time.time()
-    reply, use_voice = await exchange_brain.process(
+    return await exchange_brain.process(
         uid, text, sender_name=sender_name, is_voice_input=customer_sent_voice
     )
-    return reply, use_voice
 
+
+# ── Main ─────────────────────────────────────────────────────────
 
 async def run():
+    global _self_id
+
     client = TelegramClient('exchange_agent', TELETHON_API_ID, TELETHON_API_HASH)
     await client.start(phone=TELETHON_PHONE)
+
+    me = await client.get_me()
+    _self_id = me.id
+    log.info("[SCANNER] Started — self_id=%s (self-messages will be blocked)", _self_id)
 
     if TEST_GROUP_ONLY:
         print(f"⚠️  TEST_GROUP_ONLY=true — فقط گروه تست ({TEST_GROUP_ID}) فعال است")
         print("   پیام‌های خصوصی و سایر گروه‌ها نادیده گرفته می‌شوند")
     print("✅ Scanner running...")
 
-    # ── Debug: log ALL messages including outgoing (temporary) ───────
+    # ── Debug: log ALL messages (including outgoing) ─────────────
     @client.on(events.NewMessage)
     async def debug_all(event):
         print(f"[DEBUG] out={event.out} chat_id={event.chat_id} text={repr((event.text or '')[:40])}")
 
-    # ── Test-group conversation handler ──────────────────────────
+    # ── Test-group: scan-only — replies go to PRIVATE chat ───────
     @client.on(events.NewMessage(chats=[TEST_GROUP_ID], incoming=True))
     async def test_group_handler(event):
         if event.out:
@@ -220,52 +227,68 @@ async def run():
 
         sender = await event.get_sender()
         uid = sender.id
-
-        if uid in EXCLUDED_IDS:
-            return
-
         customer_sent_voice = False
 
         if event.message.voice:
             customer_sent_voice = True
             audio = await event.download_media(bytes)
-            text  = await voice_to_text(audio)
+            text = await voice_to_text(audio)
             if not text:
-                await event.respond("نشنیدم، دوباره بگو.")
                 return
         else:
             text = event.message.message or ""
+
+        reason = _should_ignore(uid, text, event)
+        if reason:
+            log.info("[SELF_MESSAGE_BLOCKED] test_group uid=%s reason=%s", uid, reason)
+            return
 
         if not text or len(text) < 2:
             return
 
         sender_name = getattr(sender, "first_name", "") or getattr(sender, "username", "") or ""
-        reply, use_voice = await _handle_message(client, uid, text, customer_sent_voice, sender_name)
+        log.info("[GROUP_SCAN_ONLY] uid=%s — processing then replying privately", uid)
 
-        if use_voice:
-            ok = await send_voice_message(client, TEST_GROUP_ID, reply)
-            if not ok:
-                await event.respond(reply)
-        else:
-            await event.respond(reply)
+        reply, use_voice = await _handle_message(client, uid, text, customer_sent_voice, sender_name)
+        _record_bot_reply(reply)
+
+        # Groups are scan-only — always reply via private message
+        try:
+            if use_voice:
+                ok = await send_voice_message(client, uid, reply)
+                if not ok:
+                    await client.send_message(uid, reply)
+            else:
+                await client.send_message(uid, reply)
+            log.info("[PRIVATE_LEAD_STARTED] uid=%s reply sent privately", uid)
+        except Exception as e:
+            log.error("[SCANNER] Private reply failed uid=%s: %s", uid, e)
 
         channel = "voice" if customer_sent_voice else "text"
         await _notify_admin_reply(uid, sender_name, text, reply, channel)
 
-    # ── Production group scanner (outreach to new leads) ─────────
+    # ── Production groups: lead detection + private outreach ─────
     @client.on(events.NewMessage)
     async def group_handler(event):
         if TEST_GROUP_ONLY:
             return
-
         if event.out or event.is_private:
             return
 
+        sender = await event.get_sender()
+        if not sender:
+            return
+        uid = sender.id
         text = event.message.message or ""
+
+        reason = _should_ignore(uid, text, event)
+        if reason:
+            log.info("[SELF_MESSAGE_BLOCKED] group uid=%s reason=%s", uid, reason)
+            return
+
         if len(text) < 3:
             return
 
-        # Score lead confidence — ignore marketplace posts and low-confidence
         lead_score = _score_lead(text)
         if lead_score < 0.3:
             return
@@ -274,19 +297,18 @@ async def run():
         if not t:
             return
 
-        sender = await event.get_sender()
-        uid = sender.id
-
         if uid in EXCLUDED_IDS or is_contacted(uid):
             return
 
         amount = extract_amount(text)
         add_contacted(uid)
-
         await asyncio.sleep(2)
 
         reply = await send_intro_message(client, uid, "user", t, amount)
         await client.send_message(uid, reply)
+        _record_bot_reply(reply)
+        log.info("[PRIVATE_LEAD_STARTED] uid=%s amount=%s type=%s conf=%.0f%%",
+                 uid, amount, t, lead_score * 100)
 
         bot = Bot(token=BOT_TOKEN)
         deal_label = "فروش" if t == "seller" else "خرید"
@@ -296,38 +318,39 @@ async def run():
             parse_mode="Markdown"
         )
 
-    # ── Private chat handler ──────────────────────────────────────
+    # ── Private chat: full conversation handler ──────────────────
     @client.on(events.NewMessage(incoming=True))
     async def private_handler(event):
         if TEST_GROUP_ONLY:
             return
-
         if event.out or not event.is_private:
             return
 
         sender = await event.get_sender()
         uid = sender.id
-
-        if uid in EXCLUDED_IDS:
-            return
-
         customer_sent_voice = False
 
         if event.message.voice:
             customer_sent_voice = True
             audio = await event.download_media(bytes)
-            text  = await voice_to_text(audio)
+            text = await voice_to_text(audio)
             if not text:
                 await event.respond("نشنیدم، دوباره بگو.")
                 return
         else:
             text = event.message.message or ""
 
+        reason = _should_ignore(uid, text, event)
+        if reason:
+            log.info("[SELF_MESSAGE_BLOCKED] private uid=%s reason=%s", uid, reason)
+            return
+
         if not text:
             return
 
         sender_name = getattr(sender, "first_name", "") or getattr(sender, "username", "") or ""
         reply, use_voice = await _handle_message(client, uid, text, customer_sent_voice, sender_name)
+        _record_bot_reply(reply)
 
         if use_voice:
             ok = await send_voice_message(client, uid, reply)
