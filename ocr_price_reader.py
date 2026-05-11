@@ -43,7 +43,7 @@ _MARKETPLACE_BLACKLIST = [
 ]
 
 # Only persist extractions above this confidence to the database.
-_MIN_OCR_CONFIDENCE = 0.49
+_MIN_OCR_CONFIDENCE = 0.8
 
 
 def _is_marketplace_post(text: str) -> bool:

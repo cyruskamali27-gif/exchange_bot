@@ -78,8 +78,9 @@ MAX_PRICE_AGE_MINUTES = int(os.environ.get("MAX_PRICE_AGE_MINUTES", "60"))
 # ─── Telegram price source channels ──────────────────────────────
 # USDT: only @tetherpriceFa — posts the live SELL price
 PRICE_CHANNELS_USDT    = ["tetherpriceFa"]
-# USD/CAD: 4 Toronto exchange channels — monitored via OCR + text extraction
-PRICE_CHANNELS_USD_CAD = ["SarafiBahmaniCa", "ApadanaCurrencyExchange", "hanaexchange", "tether_dollar71"]
+# USD/CAD: tether_dollar71 posts structured text with USD/CAD hourly
+# (SarafiBahmaniCa, ApadanaCurrencyExchange, hanaexchange removed — photo-only, no price text)
+PRICE_CHANNELS_USD_CAD = ["tether_dollar71"]
 PRICE_CHANNELS_USD     = PRICE_CHANNELS_USD_CAD   # backward compat
 PRICE_CHANNELS_CAD     = PRICE_CHANNELS_USD_CAD
 PRICE_CHANNELS_ALL     = PRICE_CHANNELS_USDT + PRICE_CHANNELS_USD_CAD
