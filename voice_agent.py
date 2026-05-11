@@ -1,4 +1,5 @@
 import io
+import logging
 import os
 import asyncio
 import subprocess
@@ -11,11 +12,15 @@ from config import (
 )
 from natural_replies import voice_optimize
 
+log = logging.getLogger("voice_agent")
+
+_MAX_UPLOAD_RETRIES = 3
+
 
 async def voice_to_text(audio_bytes):
     """Transcribe voice bytes via Groq Whisper. Returns None gracefully on any failure."""
     if not GROQ_API_KEY:
-        print("STT: GROQ_API_KEY not set — falling back to text-only mode")
+        log.warning("[VOICE_AGENT] GROQ_API_KEY not set — falling back to text-only mode")
         return None
 
     def _transcribe():
@@ -26,14 +31,14 @@ async def voice_to_text(audio_bytes):
             data = {"model": "whisper-large-v3", "language": "fa"}
             r = requests.post(url, headers=headers, files=files, data=data, timeout=20)
             if r.status_code == 401:
-                print("STT: Groq API key invalid — voice recognition disabled")
+                log.error("[VOICE_AGENT] Groq API key invalid — voice recognition disabled")
                 return None
             if r.status_code != 200:
-                print("STT ERROR:", r.status_code, r.text[:200])
+                log.error("[VOICE_AGENT] Groq STT error %s: %s", r.status_code, r.text[:200])
                 return None
             return r.json().get("text")
         except Exception as e:
-            print("STT EXCEPTION:", e)
+            log.error("[VOICE_AGENT] Groq STT exception: %s", e)
             return None
 
     return await asyncio.to_thread(_transcribe)
@@ -56,11 +61,16 @@ def _synthesize_mp3(text: str) -> bytes | None:
             "use_speaker_boost": True,
         },
     }
-    r = requests.post(url, headers=headers, json=payload)
-    if r.status_code != 200:
-        print("TTS ERROR:", r.status_code, r.text)
+    try:
+        r = requests.post(url, headers=headers, json=payload, timeout=30)
+        if r.status_code != 200:
+            log.error("[ELEVENLABS] TTS error %s: %s", r.status_code, r.text[:200])
+            return None
+        log.debug("[ELEVENLABS] TTS synthesized %d bytes", len(r.content))
+        return r.content
+    except Exception as e:
+        log.error("[ELEVENLABS] TTS exception: %s", e)
         return None
-    return r.content
 
 
 def mix_office_ambience(voice_mp3_bytes: bytes) -> bytes:
@@ -72,7 +82,7 @@ def mix_office_ambience(voice_mp3_bytes: bytes) -> bytes:
     if not ENABLE_OFFICE_AMBIENCE:
         return voice_mp3_bytes
     if not os.path.exists(OFFICE_AMBIENCE_FILE):
-        print(f"AMBIENCE: file not found at {OFFICE_AMBIENCE_FILE} — skipping mix")
+        log.warning("[VOICE_AGENT] Ambience file not found: %s — skipping mix", OFFICE_AMBIENCE_FILE)
         return voice_mp3_bytes
 
     in_fd,  in_path  = tempfile.mkstemp(suffix=".mp3")
@@ -101,7 +111,7 @@ def mix_office_ambience(voice_mp3_bytes: bytes) -> bytes:
             return f.read()
 
     except Exception as e:
-        print(f"AMBIENCE MIX ERROR: {e} — sending clean voice")
+        log.warning("[VOICE_AGENT] Ambience mix error: %s — sending clean voice", e)
         return voice_mp3_bytes
     finally:
         for p in (in_path, out_path):
@@ -154,22 +164,56 @@ def save_mp3_for_hosting(mp3_bytes: bytes, host_dir: str = "/var/www/html/tts_ca
 
 
 async def send_voice_message(client, uid, text):
-    """Generate ElevenLabs TTS, mix in office ambience, send as Telegram voice note."""
+    """
+    Generate ElevenLabs TTS, mix in office ambience, send as Telegram voice note.
+    Retries upload up to _MAX_UPLOAD_RETRIES times on failure.
+    Returns True on success, False if all attempts fail.
+    """
+    log.info("[VOICE_AGENT] Generating voice for uid=%s (%d chars)", uid, len(text))
+
     optimized = voice_optimize(text)
     audio = await asyncio.to_thread(_synthesize_mp3, optimized)
     if not audio:
+        log.error("[VOICE_AGENT] TTS synthesis failed for uid=%s — falling back to text", uid)
         return False
 
-    # Mix office ambience at low volume
     audio = await asyncio.to_thread(mix_office_ambience, audio)
 
     ogg_path = None
     try:
         ogg_path = await asyncio.to_thread(_mp3_to_ogg, audio)
-        await client.send_file(uid, ogg_path, voice_note=True)
-        return True
+
+        # Verify file exists and is non-empty before attempting upload
+        if not os.path.exists(ogg_path):
+            log.error("[VOICE_AGENT] OGG file missing after conversion: %s", ogg_path)
+            return False
+        file_size = os.path.getsize(ogg_path)
+        if file_size == 0:
+            log.error("[VOICE_AGENT] OGG file is empty after conversion: %s", ogg_path)
+            return False
+        log.debug("[VOICE_AGENT] OGG ready: %s (%d bytes)", ogg_path, file_size)
+
+        last_exc = None
+        for attempt in range(1, _MAX_UPLOAD_RETRIES + 1):
+            try:
+                await client.send_file(uid, ogg_path, voice_note=True)
+                log.info("[VOICE_AGENT] Voice sent to uid=%s (attempt %d)", uid, attempt)
+                return True
+            except Exception as e:
+                last_exc = e
+                log.warning(
+                    "[VOICE_AGENT] Upload attempt %d/%d failed for uid=%s: %s",
+                    attempt, _MAX_UPLOAD_RETRIES, uid, e,
+                )
+                if attempt < _MAX_UPLOAD_RETRIES:
+                    await asyncio.sleep(1.5 * attempt)
+
+        log.error("[VOICE_AGENT] All %d upload attempts failed for uid=%s: %s",
+                  _MAX_UPLOAD_RETRIES, uid, last_exc)
+        return False
+
     except Exception as e:
-        print("SEND VOICE ERROR:", e)
+        log.error("[VOICE_AGENT] Unexpected error for uid=%s: %s", uid, e)
         return False
     finally:
         if ogg_path:
@@ -187,9 +231,12 @@ async def generate_call_audio_url(text: str, base_url: str = "https://watherdata
     optimized = voice_optimize(text)
     audio = await asyncio.to_thread(_synthesize_mp3, optimized)
     if not audio:
+        log.error("[VOICE_AGENT] TTS synthesis failed for Twilio call")
         return None
 
     audio = await asyncio.to_thread(mix_office_ambience, audio)
 
     filename = await asyncio.to_thread(save_mp3_for_hosting, audio)
-    return f"{base_url}/tts_cache/{filename}"
+    url = f"{base_url}/tts_cache/{filename}"
+    log.info("[VOICE_AGENT] Twilio audio hosted at %s", url)
+    return url

@@ -18,6 +18,7 @@ from datetime import datetime
 from config import HUME_API_KEY, ENABLE_HUME_EMOTION
 
 log = logging.getLogger("emotion_engine")
+# All Hume-related entries are prefixed [HUME]; rule-based entries use [EMOTION]
 DB_PATH = "/var/www/exchange_bot/exchange.db"
 
 # ─── Keyword sets ─────────────────────────────────────────────────────────────
@@ -125,7 +126,7 @@ def save_emotion(uid: int, emotion_data: dict, conv_id: int = None):
         conn.commit()
         conn.close()
     except Exception as e:
-        log.error("save_emotion: %s", e)
+        log.error("[EMOTION] save_emotion: %s", e)
 
 
 def get_emotion_history(uid: int, limit: int = 10) -> list:
@@ -181,7 +182,7 @@ async def _hume_enrich(uid: int, text: str, base: dict, conv_id: int = None):
     if not ENABLE_HUME_EMOTION or not HUME_API_KEY:
         return
     if _time.time() < _hume_rate_limit_until:
-        log.debug("Hume in cooldown (%.0f s left), skipping uid=%s",
+        log.debug("[HUME] in cooldown (%.0f s left), skipping uid=%s",
                   _hume_rate_limit_until - _time.time(), uid)
         return
 
@@ -208,7 +209,7 @@ async def _hume_enrich(uid: int, text: str, base: dict, conv_id: int = None):
                     return None
             return None
         except Exception as e:
-            log.debug("Hume _call error: %s", e)
+            log.debug("[HUME] _call error: %s", e)
             raise   # re-raise so the outer handler can inspect
 
     try:
@@ -242,17 +243,17 @@ async def _hume_enrich(uid: int, text: str, base: dict, conv_id: int = None):
                 pass
 
         save_emotion(uid, enriched, conv_id)
-        log.debug("Hume enriched uid=%s emotion=%s", uid, enriched["dominant_emotion"])
+        log.debug("[HUME] enriched uid=%s emotion=%s", uid, enriched["dominant_emotion"])
 
     except asyncio.TimeoutError:
-        log.debug("Hume timeout uid=%s", uid)
+        log.debug("[HUME] timeout uid=%s", uid)
     except Exception as e:
         err = str(e).lower()
         if any(k in err for k in ("429", "rate", "limit", "quota", "unauthorized", "403")):
             _hume_rate_limit_until = _time.time() + _HUME_COOLDOWN_S
-            log.warning("Hume rate-limited/auth error — cooldown %ds | %s", _HUME_COOLDOWN_S, e)
+            log.warning("[HUME] rate-limited/auth error — cooldown %ds | %s", _HUME_COOLDOWN_S, e)
         else:
-            log.error("Hume enrichment error uid=%s: %s", uid, e)
+            log.error("[HUME] enrichment error uid=%s: %s", uid, e)
 
 
 # ─── Main entry point ─────────────────────────────────────────────────────────

@@ -15,6 +15,7 @@ from config import (
 )
 
 log = logging.getLogger("price_engine")
+# All entries prefixed [PRICE_ENGINE]
 CURRENT_PRICE_JSON = "/var/www/exchange_bot/current_price.json"
 
 DB_PATH = "/var/www/exchange_bot/exchange.db"
@@ -40,7 +41,7 @@ def _write_price_json(currency: str, ref: int, our_sell: int, our_buy: int):
         with open(CURRENT_PRICE_JSON, "w") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
     except Exception as e:
-        log.warning("price JSON write error: %s", e)
+        log.warning("[PRICE_ENGINE] price JSON write error: %s", e)
 
 
 def init_price_json():
@@ -66,7 +67,7 @@ def init_price_json():
         ).fetchall()
         conn.close()
     except Exception as e:
-        log.warning("init_price_json DB error: %s", e)
+        log.warning("[PRICE_ENGINE] init_price_json DB error: %s", e)
         return
 
     added = []
@@ -87,9 +88,9 @@ def init_price_json():
         try:
             with open(CURRENT_PRICE_JSON, "w") as f:
                 json.dump(existing, f, ensure_ascii=False, indent=2)
-            log.info("price JSON: added %s from DB", added)
+            log.info("[PRICE_ENGINE] price JSON: added %s from DB", added)
         except Exception as e:
-            log.warning("init_price_json write error: %s", e)
+            log.warning("[PRICE_ENGINE] init_price_json write error: %s", e)
 
 
 # Seed on module load so any importer gets a valid JSON immediately

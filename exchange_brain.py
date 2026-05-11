@@ -45,9 +45,9 @@ try:
     from google import genai as _gai
     _gemini   = _gai.Client(api_key=GEMINI_API_KEY)
     _GEMINI_OK = True
-    log.info("Gemini ready in exchange_brain")
+    log.info("[BRAIN] Gemini ready")
 except Exception as _e:
-    log.warning("Gemini unavailable: %s", _e)
+    log.warning("[BRAIN] Gemini unavailable: %s", _e)
 
 # ─── Price keyword detection ──────────────────────────────────────────────────
 
@@ -132,7 +132,7 @@ def _ensure_profile(uid: int, name: str = ""):
         conn.commit()
         conn.close()
     except Exception as e:
-        log.error("_ensure_profile: %s", e)
+        log.error("[BRAIN] _ensure_profile: %s", e)
 
 
 def _get_profile(uid: int) -> dict:
@@ -198,7 +198,7 @@ def _save_turn(uid: int, role: str, message: str,
         conn.close()
         return cid
     except Exception as e:
-        log.error("_save_turn: %s", e)
+        log.error("[BRAIN] _save_turn: %s", e)
         return None
 
 
@@ -213,7 +213,7 @@ def _update_profile(uid: int, **kw):
         conn.commit()
         conn.close()
     except Exception as e:
-        log.error("_update_profile: %s", e)
+        log.error("[BRAIN] _update_profile: %s", e)
 
 
 def _save_pricing_decision(uid: int, price: float, source: str):
@@ -237,9 +237,9 @@ def save_learned_mistake(original: str, corrected: str, mistake_type: str = "adm
             (mistake_type, original, corrected, str(admin_id), datetime.now().isoformat()))
         conn.commit()
         conn.close()
-        log.info("Learned mistake saved: %s → %s", original[:40], corrected[:40])
+        log.info("[BRAIN] Learned mistake saved: %s → %s", original[:40], corrected[:40])
     except Exception as e:
-        log.error("save_learned_mistake: %s", e)
+        log.error("[BRAIN] save_learned_mistake: %s", e)
 
 
 def save_successful_pattern(pattern: str, mood: str = "neutral"):
@@ -255,7 +255,7 @@ def save_successful_pattern(pattern: str, mood: str = "neutral"):
         conn.commit()
         conn.close()
     except Exception as e:
-        log.error("save_successful_pattern: %s", e)
+        log.error("[BRAIN] save_successful_pattern: %s", e)
 
 
 # ─── Live price ───────────────────────────────────────────────────────────────
@@ -519,7 +519,7 @@ async def process(uid: int, text: str, sender_name: str = "",
             )
             reply = resp
         except Exception as e:
-            log.error("Gemini error: %s", e)
+            log.error("[BRAIN] Gemini error: %s", e)
             reply = get_reply("customer_buy")
     else:
         reply = get_reply("customer_buy")
