@@ -191,17 +191,19 @@ async def _hume_enrich(uid: int, text: str, base: dict, conv_id: int = None):
             from hume.expression_measurement.batch import Models, Language
 
             client  = HumeClient(api_key=HUME_API_KEY)
-            job     = client.expression_measurement.batch.start_inference_job(
+            job_result = client.expression_measurement.batch.start_inference_job(
                 models=Models(language=Language()),
-                text=[{"text": text}],
+                text=[text],
             )
+            # SDK may return a string job_id or an object with .job_id
+            job_id = job_result if isinstance(job_result, str) else job_result.job_id
             # Poll max 12 s
             for _ in range(24):
                 _time.sleep(0.5)
-                details = client.expression_measurement.batch.get_job_details(id=job.job_id)
+                details = client.expression_measurement.batch.get_job_details(id=job_id)
                 status  = details.state.status.value
                 if status == "COMPLETED":
-                    return client.expression_measurement.batch.get_job_predictions(id=job.job_id)
+                    return client.expression_measurement.batch.get_job_predictions(id=job_id)
                 if status == "FAILED":
                     return None
             return None
