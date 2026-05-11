@@ -29,6 +29,18 @@ EXCLUDED_IDS = []
 BUY_SPREAD_TOMAN  = int(os.environ.get("BUY_SPREAD_TOMAN",  4000))
 SELL_SPREAD_TOMAN = int(os.environ.get("SELL_SPREAD_TOMAN",  500))
 
+# ─── Per-currency spread rules ────────────────────────────────────
+# USDT: our sell = channel price (0 spread), our buy = channel price - 4000
+USDT_BUY_SPREAD      = int(os.environ.get("USDT_BUY_SPREAD", "4000"))
+# USD/CAD: our sell = competitor avg sell - 200, our buy = competitor avg buy + 200
+USD_CAD_SELL_MARGIN  = int(os.environ.get("USD_CAD_SELL_MARGIN", "200"))
+USD_CAD_BUY_MARGIN   = int(os.environ.get("USD_CAD_BUY_MARGIN",  "200"))
+
+# ─── Business hours (Toronto) — USD/CAD only ─────────────────────
+TIMEZONE             = os.environ.get("TIMEZONE", "America/Toronto")
+USD_CAD_OPEN_HOUR    = int(os.environ.get("USD_CAD_OPEN_HOUR",  "9"))
+USD_CAD_CLOSE_HOUR   = int(os.environ.get("USD_CAD_CLOSE_HOUR", "17"))
+
 # ─── ElevenLabs Conversational AI ────────────────────────────────
 ELEVENLABS_AGENT_ID = os.environ.get("ELEVENLABS_AGENT_ID", "agent_1101kr77twbhe1p9c7mpf1b7z2e3")
 
@@ -64,6 +76,10 @@ MARKET_SPREAD_TOMAN  = int(os.environ.get("MARKET_SPREAD_TOMAN", "500"))
 MAX_PRICE_AGE_MINUTES = int(os.environ.get("MAX_PRICE_AGE_MINUTES", "60"))
 
 # ─── Telegram price source channels ──────────────────────────────
-PRICE_CHANNELS_USDT = ["tetherpriceFa", "tether_dollar71"]
-PRICE_CHANNELS_USD  = ["tahran_sabza", "SarafiBahmaniCa", "ApadanaCurrencyExchange", "hanaexchange"]
-PRICE_CHANNELS_ALL  = PRICE_CHANNELS_USDT + PRICE_CHANNELS_USD
+# USDT: only @tetherpriceFa — posts the live SELL price
+PRICE_CHANNELS_USDT    = ["tetherpriceFa"]
+# USD/CAD: 4 Toronto exchange channels — monitored via OCR + text extraction
+PRICE_CHANNELS_USD_CAD = ["SarafiBahmaniCa", "ApadanaCurrencyExchange", "hanaexchange", "tether_dollar71"]
+PRICE_CHANNELS_USD     = PRICE_CHANNELS_USD_CAD   # backward compat
+PRICE_CHANNELS_CAD     = PRICE_CHANNELS_USD_CAD
+PRICE_CHANNELS_ALL     = PRICE_CHANNELS_USDT + PRICE_CHANNELS_USD_CAD

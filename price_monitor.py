@@ -26,7 +26,8 @@ client = TelegramClient(
 
 CHANNELS = {
     "tetherpriceFa": "USDT",
-    "tahran_sabza":  "USD",
+    # USD/CAD rates come from OCR price monitor (ocr_price_reader.py)
+    # which watches SarafiBahmaniCa, ApadanaCurrencyExchange, hanaexchange, tether_dollar71
 }
 
 # In-memory last-seen prices for JSON export

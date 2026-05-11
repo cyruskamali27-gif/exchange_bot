@@ -22,10 +22,12 @@ import re
 import sqlite3
 import time
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from config import (
     ADMIN_ID, BOT_TOKEN, GEMINI_API_KEY,
     BUY_SPREAD_TOMAN, SELL_SPREAD_TOMAN, VOICE_REPLIES_ENABLED,
+    TIMEZONE, USD_CAD_OPEN_HOUR, USD_CAD_CLOSE_HOUR,
 )
 from price_engine import calculate_rate
 from emotion_engine import analyze as analyze_emotion, get_emotional_fingerprint
@@ -63,9 +65,50 @@ def detect_currency(text: str) -> str:
     t = text.lower()
     if any(k in t for k in ["تتر", "usdt"]):
         return "USDT"
-    if any(k in t for k in ["آمریکا", "امریکا", " usd"]):
+    if any(k in t for k in ["آمریکا", "امریکا", " usd", "دلار آمریکا"]):
         return "USD"
-    return "CAD"
+    if any(k in t for k in ["کانادا", "cad", "کانادایی"]):
+        return "CAD"
+    return "USD"   # default when just "دلار" with no qualifier
+
+
+def _is_business_hours() -> bool:
+    """USD/CAD only available 9 AM – 5 PM America/Toronto."""
+    try:
+        tz = ZoneInfo(TIMEZONE)
+        now = datetime.now(tz)
+        return USD_CAD_OPEN_HOUR <= now.hour < USD_CAD_CLOSE_HOUR
+    except Exception:
+        return True   # fail open
+
+
+def _detect_direction(text: str, history: list) -> str | None:
+    """Return 'buyer' | 'seller' | None from current text + recent history."""
+    sell_kw = ["فروش", "sell", "میفروشم", "می‌فروشم", "می فروشم", "فروشی", "دارم فروش"]
+    buy_kw  = ["خرید", "buy", "میخرم", "می‌خرم", "می خرم", "خریدار", "میخوام", "نیاز دارم"]
+    for t in [text] + [m for _, m in (history or [])[-4:]]:
+        tl = t.lower()
+        if any(k in tl for k in sell_kw):
+            return "seller"
+        if any(k in tl for k in buy_kw):
+            return "buyer"
+    return None
+
+
+def _detect_method(text: str, history: list) -> str | None:
+    """Return 'etransfer' | 'cash' | 'cheque' | None from text + history."""
+    etransfer_kw = ["حواله", "e-transfer", "etransfer", "ترنسفر", "اینترک", "interac"]
+    cash_kw      = ["نقدی", "نقد", "cash", "کش"]
+    cheque_kw    = ["چک", "cheque", "check"]
+    for t in [text] + [m for _, m in (history or [])[-4:]]:
+        tl = t.lower()
+        if any(k in tl for k in etransfer_kw):
+            return "etransfer"
+        if any(k in tl for k in cash_kw):
+            return "cash"
+        if any(k in tl for k in cheque_kw):
+            return "cheque"
+    return None
 
 # ─── DB helpers ───────────────────────────────────────────────────────────────
 
@@ -214,8 +257,8 @@ def save_successful_pattern(pattern: str, mood: str = "neutral"):
 
 # ─── Live price ───────────────────────────────────────────────────────────────
 
-def _get_live_price(currency: str) -> dict | None:
-    rate = calculate_rate(currency)
+def _get_live_price(currency: str, method: str = None) -> dict | None:
+    rate = calculate_rate(currency, method=method)
     if rate:
         return rate
     try:
@@ -231,6 +274,7 @@ def _get_live_price(currency: str) -> dict | None:
                 "our_buy":    p - BUY_SPREAD_TOMAN,
                 "amount":     0,
                 "margin":     0,
+                "payment_method": method or "general",
             }
     except Exception:
         pass
@@ -294,9 +338,15 @@ def _build_prompt(uid: int, text: str, profile: dict, emotion: dict,
         fp_note = f"الگوی احساسی طولانی‌مدت: {fp['dominant_pattern']}"
 
     # Price block
+    _METHOD_LABEL = {"etransfer": "حواله", "cash": "نقدی", "cheque": "چک", "general": ""}
+
     if is_price:
         if price_data:
-            label = _CUR_LABEL.get(currency, currency)
+            label  = _CUR_LABEL.get(currency, currency)
+            method = price_data.get("payment_method", "general")
+            mlabel = _METHOD_LABEL.get(method, "")
+            if mlabel:
+                label = f"{label} ({mlabel})"
             neg_buf = 200 if dominant == "negotiator" else 0
             sell = price_data.get("our_sell", 0) + neg_buf
             buy  = price_data.get("our_buy", 0)
@@ -404,9 +454,8 @@ async def process(uid: int, text: str, sender_name: str = "",
     emotion = await analyze_emotion(uid, text)
 
     # ── 3. Price detection ───────────────────────────────────────
-    price_req  = is_price_request(text)
-    currency   = detect_currency(text)
-    price_data = _get_live_price(currency) if price_req else None
+    price_req = is_price_request(text)
+    currency  = detect_currency(text)
 
     # ── 4. Save user turn ────────────────────────────────────────
     _save_turn(uid, "user", text, was_voice=is_voice_input, emotion=emotion["dominant_emotion"])
@@ -419,7 +468,39 @@ async def process(uid: int, text: str, sender_name: str = "",
         total_conversations=(profile.get("total_conversations") or 0) + 1,
     )
 
-    # ── 6. Generate reply ────────────────────────────────────────
+    # ── 6. Business rules for price requests ─────────────────────
+    price_data = None
+    if price_req:
+        if currency != "USDT":
+            # USD/CAD: time-gated
+            if not _is_business_hours():
+                reply = "نرخ دلار و دلار کانادا فقط بین ساعت ۹ صبح تا ۵ عصر ارائه میشه."
+                _save_turn(uid, "bot", reply)
+                use_voice = _decide_voice(uid, is_voice_input, True, profile, emotion)
+                return reply, use_voice
+
+            # Must know buy/sell direction
+            direction = _detect_direction(text, history)
+            if not direction:
+                reply = "برای خرید می‌خواید یا فروش؟"
+                _save_turn(uid, "bot", reply)
+                return reply, False
+
+            # Must know payment method
+            method = _detect_method(text, history)
+            if not method:
+                reply = "حواله، نقدی یا چک؟"
+                _save_turn(uid, "bot", reply)
+                return reply, False
+
+            price_data = _get_live_price(currency, method=method)
+        else:
+            # USDT 24/7 — no method needed
+            method    = None
+            direction = _detect_direction(text, history)
+            price_data = _get_live_price("USDT")
+
+    # ── 7. Generate reply ────────────────────────────────────────
     if price_req and not price_data:
         reply = "نرخ الان تابلوئه، چند دقیقه دیگه دوباره پیام بدید."
     elif _GEMINI_OK:
@@ -457,12 +538,12 @@ async def process(uid: int, text: str, sender_name: str = "",
         except Exception:
             pass
 
-    # ── 7. Save bot turn & pricing ───────────────────────────────
+    # ── 8. Save bot turn & pricing ───────────────────────────────
     _save_turn(uid, "bot", reply)
     if price_req and price_data:
         _save_pricing_decision(uid, price_data.get("our_sell", 0), currency)
 
-    # ── 8. Decide voice ──────────────────────────────────────────
+    # ── 9. Decide voice — price requests always text ──────────────
     use_voice = _decide_voice(uid, is_voice_input, price_req, profile, emotion)
 
     return reply, use_voice

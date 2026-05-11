@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from telethon import TelegramClient, events
 from config import (
     TELETHON_API_ID, TELETHON_API_HASH, TELETHON_PHONE,
-    PRICE_CHANNELS_ALL, PRICE_CHANNELS_USDT, PRICE_CHANNELS_USD,
+    PRICE_CHANNELS_ALL, PRICE_CHANNELS_USDT, PRICE_CHANNELS_USD_CAD,
     MAX_PRICE_AGE_MINUTES,
 )
 from price_engine import save_market_price
@@ -24,15 +24,57 @@ _CURRENCIES = {
     "CAD":  ["دلار کانادا", "کانادایی", "کانادا", "CAD", "cad"],
 }
 
-_SELL_WORDS = ["فروش", "sell", "فروختن", "میفروشم", "می‌فروشم"]
-_BUY_WORDS  = ["خرید", "buy", "خریدن", "میخرم", "می‌خرم"]
+_SELL_WORDS = ["فروش", "sell", "فروختن", "میفروشم", "می‌فروشم", "می فروشم", "فروشی"]
+_BUY_WORDS  = ["خرید", "buy", "خریدن", "میخرم", "می‌خرم", "می خرم", "خریدار"]
+
+_METHOD_ETRANSFER = ["حواله", "e-transfer", "etransfer", "ترنسفر", "اینترک", "interac"]
+_METHOD_CASH      = ["نقدی", "نقد", "cash", "کش"]
+_METHOD_CHEQUE    = ["چک", "cheque", "check"]
+
+# Marketplace / non-currency blacklist — ignore these posts entirely
+_MARKETPLACE_BLACKLIST = [
+    "فروش ماشین", "فروش خودرو", "فروش آپارتمان", "فروش ملک", "فروش موبایل",
+    "فروش لپتاپ", "فروش تلویزیون", "فروش یخچال", "فروش لوازم", "فروش اجناس",
+    "کرایه", "اجاره", "رهن", "طلافروشی", "زیور آلات", "جواهر",
+    "car for sale", "apartment", "furniture", "appliance", "phone for sale",
+    "laptop for sale", "tv for sale", "dollar item", "dollar store",
+    "5 dollar", "10 dollar", "20 dollar", "50 dollar",
+    "فروش وسایل", "اثاثیه", "مبل", "کاناپه", "فرش",
+]
 
 # Only persist extractions above this confidence to the database.
-# 0.9 = keyword→price match (reliable) — always saved
-# 0.5 = bare number fallback (noisy) — filtered out once keyword matching works
-# 0.49 threshold: blocks truly garbage extractions while keeping current USD/CAD feed
-# (raise to 0.65 once keyword→price regex is confirmed matching all channels)
 _MIN_OCR_CONFIDENCE = 0.49
+
+
+def _is_marketplace_post(text: str) -> bool:
+    """Return True if this message is clearly NOT a currency exchange post."""
+    if not text:
+        return False
+    t = text.lower()
+    if any(phrase in t for phrase in _MARKETPLACE_BLACKLIST):
+        return True
+    # "X dollar" patterns where X is small (product price, not exchange rate)
+    import re as _re
+    small_dollar = _re.findall(r"(\d+)\s*(?:dollar|دلار)", t)
+    if small_dollar and all(int(n) < 500 for n in small_dollar):
+        # Only block if there's no currency-exchange keyword present
+        exchange_kw = ["تتر", "usdt", "نرخ", "صرافی", "خرید دلار", "فروش دلار",
+                       "حواله", "کانادا", "cad", "نقدی", "چک"]
+        if not any(kw in t for kw in exchange_kw):
+            return True
+    return False
+
+
+def _detect_method(text: str) -> str:
+    """Detect payment method from text: etransfer | cash | cheque | general"""
+    t = text.lower()
+    if any(k in t for k in _METHOD_ETRANSFER):
+        return "etransfer"
+    if any(k in t for k in _METHOD_CASH):
+        return "cash"
+    if any(k in t for k in _METHOD_CHEQUE):
+        return "cheque"
+    return "general"
 
 
 def _normalize_digits(text):
@@ -56,13 +98,14 @@ def _parse_price(raw):
 def extract_prices_from_text(text):
     """
     Parse text from a Telegram message.
-    Returns list of dicts: {currency, price, direction, confidence}
+    Returns list of dicts: {currency, price, direction, confidence, payment_method}
     direction: 'sell' | 'buy' | None
-
-    Bug-fix: pattern matching now runs on digit-normalised text so Farsi/Arabic
-    numerals (۱۷۸٬۵۰۰) are treated identically to ASCII digits (178,500).
     """
     if not text:
+        return []
+
+    # Reject marketplace / non-currency posts immediately
+    if _is_marketplace_post(text):
         return []
 
     results = []
@@ -94,10 +137,11 @@ def extract_prices_from_text(text):
                     elif any(w in ctx for w in _BUY_WORDS):
                         direction = "buy"
                     results.append({
-                        "currency":   cur,
-                        "price":      p,
-                        "direction":  direction,
-                        "confidence": 0.9,
+                        "currency":       cur,
+                        "price":          p,
+                        "direction":      direction,
+                        "confidence":     0.9,
+                        "payment_method": _detect_method(norm),
                     })
 
     # Fallback: bare price pattern — lower confidence, one match per message
@@ -114,10 +158,11 @@ def extract_prices_from_text(text):
                 elif any(w in ctx for w in _BUY_WORDS):
                     direction = "buy"
                 results.append({
-                    "currency":   "USDT",
-                    "price":      p,
-                    "direction":  direction,
-                    "confidence": 0.5,
+                    "currency":       "USDT",
+                    "price":          p,
+                    "direction":      direction,
+                    "confidence":     0.5,
+                    "payment_method": "general",
                 })
                 break
 
@@ -160,10 +205,11 @@ def _is_fresh(updated_at):
 
 def _update_cache_and_db(items, source):
     for item in items:
-        cur        = item["currency"]
-        price      = item["price"]
-        direction  = item["direction"]
-        confidence = item["confidence"]
+        cur            = item["currency"]
+        price          = item["price"]
+        direction      = item["direction"]
+        confidence     = item["confidence"]
+        payment_method = item.get("payment_method", "general")
 
         # Skip noisy low-confidence bare-pattern extractions
         if confidence < _MIN_OCR_CONFIDENCE:
@@ -181,7 +227,7 @@ def _update_cache_and_db(items, source):
             "is_fresh":   True,
         }
 
-        # Persist to DB
+        # Persist to DB — store sell/buy separately with method tag
         sell = price if direction == "sell" else (price if direction is None else None)
         buy  = price if direction == "buy"  else None
         save_market_price(
@@ -189,8 +235,9 @@ def _update_cache_and_db(items, source):
             sell_price=sell,
             buy_price=buy,
             confidence=confidence,
+            payment_method=payment_method,
         )
-        print(f"💱 {cur} {direction or '~'} {price:,} تومان از @{source} (conf={confidence:.1f})")
+        print(f"💱 {cur} {direction or '~'} {price:,} تومان [{payment_method}] از @{source} (conf={confidence:.1f})")
 
 
 async def _process_message(msg, source):

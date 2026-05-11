@@ -65,11 +65,53 @@ def extract_amount(text):
     return 10
 
 
+_MARKETPLACE_BLACKLIST = [
+    "فروش ماشین", "فروش خودرو", "فروش آپارتمان", "فروش ملک", "فروش موبایل",
+    "فروش لپتاپ", "فروش تلویزیون", "فروش یخچال", "فروش لوازم",
+    "کرایه", "اجاره", "رهن", "طلافروشی", "car for sale", "apartment",
+    "furniture", "appliance", "phone for sale", "laptop for sale",
+    "5 dollar", "10 dollar", "20 dollar", "50 dollar",
+    "فروش وسایل", "اثاثیه", "مبل", "کاناپه", "فرش",
+]
+
+_LEAD_KEYWORDS = [
+    # USDT
+    "تتر", "usdt", "تتر میخوام", "تتر دارم",
+    # USD
+    "دلار آمریکا", "دلار امریکا", "usd", "دلار فروش", "دلار خرید",
+    "حواله دلار", "cash usd", "usd available",
+    # CAD
+    "دلار کانادا", "cad", "کانادایی", "cash cad",
+    # Generic exchange intent
+    "صرافی", "خریدار دلار", "فروش دلار", "ارز", "حواله",
+]
+
+
+def _score_lead(text: str) -> float:
+    """Score 0–1 confidence this is a currency exchange lead."""
+    t = text.lower()
+    # Instantly disqualify marketplace posts
+    if any(phrase in t for phrase in _MARKETPLACE_BLACKLIST):
+        return 0.0
+    # Block small-dollar product prices
+    import re as _re
+    small_dollar = _re.findall(r"(\d+)\s*(?:dollar|دلار)", t)
+    if small_dollar and all(int(n) < 200 for n in small_dollar):
+        if not any(k in t for k in ["نرخ", "صرافی", "حواله", "usdt", "تتر", "کانادا"]):
+            return 0.0
+    score = 0.0
+    for kw in _LEAD_KEYWORDS:
+        if kw in t:
+            score += 0.3
+    score = min(score, 1.0)
+    return score
+
+
 def detect_type(text):
     t = text.lower()
-    if "فروش" in t or "sell" in t:
+    if any(k in t for k in ["فروش", "sell", "میفروشم", "می‌فروشم", "دارم"]):
         return "seller"
-    if "خرید" in t or "buy" in t:
+    if any(k in t for k in ["خرید", "buy", "میخرم", "می‌خرم", "میخوام", "خریدار"]):
         return "buyer"
     return None
 
@@ -223,6 +265,11 @@ async def run():
         if len(text) < 3:
             return
 
+        # Score lead confidence — ignore marketplace posts and low-confidence
+        lead_score = _score_lead(text)
+        if lead_score < 0.3:
+            return
+
         t = detect_type(text)
         if not t:
             return
@@ -245,7 +292,7 @@ async def run():
         deal_label = "فروش" if t == "seller" else "خرید"
         await bot.send_message(
             ADMIN_ID,
-            f"👤 مشتری جدید: `{uid}` | {amount} CAD | {deal_label}",
+            f"👤 مشتری جدید: `{uid}` | {amount} CAD | {deal_label} | conf={lead_score:.0%}",
             parse_mode="Markdown"
         )
 

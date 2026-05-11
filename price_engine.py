@@ -9,6 +9,9 @@ from config import (
     SELL_SPREAD_TOMAN,
     MAX_PRICE_AGE_MINUTES,
     USD_CAD_RATE,
+    USDT_BUY_SPREAD,
+    USD_CAD_SELL_MARGIN,
+    USD_CAD_BUY_MARGIN,
 )
 
 log = logging.getLogger("price_engine")
@@ -98,20 +101,22 @@ def init_price_db():
     cur = conn.cursor()
     cur.execute("""
         CREATE TABLE IF NOT EXISTS market_prices (
-            id           INTEGER PRIMARY KEY AUTOINCREMENT,
-            currency     TEXT,
-            source       TEXT,
-            sell_price   INTEGER,
-            buy_price    INTEGER,
-            message_date TEXT,
-            confidence   REAL DEFAULT 1.0,
-            created_at   INTEGER
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            currency       TEXT,
+            source         TEXT,
+            sell_price     INTEGER,
+            buy_price      INTEGER,
+            message_date   TEXT,
+            confidence     REAL DEFAULT 1.0,
+            payment_method TEXT DEFAULT 'general',
+            created_at     INTEGER
         )
     """)
-    try:
-        cur.execute("ALTER TABLE market_prices ADD COLUMN confidence REAL DEFAULT 1.0")
-    except Exception:
-        pass
+    for col, dflt in [("confidence", "1.0"), ("payment_method", "'general'")]:
+        try:
+            cur.execute(f"ALTER TABLE market_prices ADD COLUMN {col} REAL DEFAULT {dflt}")
+        except Exception:
+            pass
     cur.execute("""
         CREATE TABLE IF NOT EXISTS current_rates (
             currency    TEXT PRIMARY KEY,
@@ -121,11 +126,24 @@ def init_price_db():
             updated_at  INTEGER
         )
     """)
-    # Migrate old schema (best_sell/best_buy columns) if needed
-    try:
-        cur.execute("ALTER TABLE current_rates ADD COLUMN raw_source INTEGER")
-    except Exception:
-        pass
+    for col in ("raw_source INTEGER", "best_sell INTEGER", "best_buy INTEGER"):
+        try:
+            cur.execute(f"ALTER TABLE current_rates ADD COLUMN {col}")
+        except Exception:
+            pass
+    # Per-method rates table for USD/CAD
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS current_method_rates (
+            currency       TEXT,
+            payment_method TEXT,
+            our_sell       INTEGER,
+            our_buy        INTEGER,
+            avg_comp_sell  INTEGER,
+            avg_comp_buy   INTEGER,
+            updated_at     INTEGER,
+            PRIMARY KEY (currency, payment_method)
+        )
+    """)
     conn.commit()
     conn.close()
 
@@ -158,15 +176,17 @@ def should_send_to_manager(amount):
 def save_market_price(
     currency, source,
     sell_price=None, buy_price=None,
-    message_date=None, confidence=1.0
+    message_date=None, confidence=1.0,
+    payment_method="general",
 ):
     init_price_db()
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     cur.execute("""
         INSERT INTO market_prices
-            (currency, source, sell_price, buy_price, message_date, confidence, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+            (currency, source, sell_price, buy_price, message_date,
+             confidence, payment_method, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         currency,
         source,
@@ -174,29 +194,58 @@ def save_market_price(
         int(buy_price)  if buy_price  else None,
         message_date,
         float(confidence),
+        payment_method,
         int(time.time()),
     ))
     conn.commit()
     conn.close()
 
 
-def _get_avg_sell(currency):
-    """
-    Returns the average sell price from fresh channel data for `currency`.
-    Fresh = within MAX_PRICE_AGE_MINUTES. Returns None if no data.
-    """
+def _get_avg_sell(currency, method=None):
+    """Average competitor sell price from fresh channel data."""
     init_price_db()
     now = int(time.time())
     max_age = MAX_PRICE_AGE_MINUTES * 60
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
-    cur.execute("""
-        SELECT sell_price FROM market_prices
-        WHERE currency = ?
-          AND created_at >= ?
-          AND sell_price IS NOT NULL
-          AND confidence >= 0.5
-    """, (currency, now - max_age))
+    if method and method != "general":
+        cur.execute("""
+            SELECT sell_price FROM market_prices
+            WHERE currency = ? AND payment_method = ?
+              AND created_at >= ? AND sell_price IS NOT NULL AND confidence >= 0.5
+        """, (currency, method, now - max_age))
+    else:
+        cur.execute("""
+            SELECT sell_price FROM market_prices
+            WHERE currency = ?
+              AND created_at >= ? AND sell_price IS NOT NULL AND confidence >= 0.5
+        """, (currency, now - max_age))
+    rows = cur.fetchall()
+    conn.close()
+    if not rows:
+        return None
+    return int(sum(r[0] for r in rows) / len(rows))
+
+
+def _get_avg_buy(currency, method=None):
+    """Average competitor buy price from fresh channel data."""
+    init_price_db()
+    now = int(time.time())
+    max_age = MAX_PRICE_AGE_MINUTES * 60
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    if method and method != "general":
+        cur.execute("""
+            SELECT buy_price FROM market_prices
+            WHERE currency = ? AND payment_method = ?
+              AND created_at >= ? AND buy_price IS NOT NULL AND confidence >= 0.5
+        """, (currency, method, now - max_age))
+    else:
+        cur.execute("""
+            SELECT buy_price FROM market_prices
+            WHERE currency = ?
+              AND created_at >= ? AND buy_price IS NOT NULL AND confidence >= 0.5
+        """, (currency, now - max_age))
     rows = cur.fetchall()
     conn.close()
     if not rows:
@@ -239,22 +288,49 @@ def get_market_base(currency):
     return {"ref_price": ref, "source": currency} if ref else None
 
 
-def calculate_rate(currency, amount=100):
+def calculate_rate(currency, amount=100, method=None):
     """
-    ref_price  = avg market sell price from channels
-    our_sell   = ref_price - SELL_SPREAD_TOMAN  (we sell to customer, cheaper than market)
-    our_buy    = ref_price - BUY_SPREAD_TOMAN   (we buy from customer, our profit margin)
+    Compute our buy/sell rates using currency-specific spread rules.
+
+    USDT:
+      our_sell = @tetherpriceFa sell price  (no markup — match market)
+      our_buy  = @tetherpriceFa sell price - USDT_BUY_SPREAD (4000)
+
+    USD/CAD:
+      our_sell = competitor avg_sell - USD_CAD_SELL_MARGIN (200)
+      our_buy  = competitor avg_buy  + USD_CAD_BUY_MARGIN  (200)
+      Falls back to avg_sell - 4000 when no buy prices scraped yet.
 
     Returns None if no live data — never invents prices.
     """
-    base = get_market_base(currency)
-    if not base:
-        return None
+    if currency == "USDT":
+        ref = _get_avg_sell("USDT")
+        if not ref:
+            return None
+        our_sell = ref
+        our_buy  = ref - USDT_BUY_SPREAD
+        source_label = "tetherpriceFa"
+    else:
+        avg_sell = _get_avg_sell(currency, method)
+        if currency == "USD" and not avg_sell:
+            avg_sell = _get_avg_sell("USDT")   # USDT ≈ USD fallback
+            source_label = "USDT→USD"
+        elif currency == "CAD" and not avg_sell:
+            usdt = _get_avg_sell("USDT")
+            avg_sell = int(usdt / USD_CAD_RATE) if usdt else None
+            source_label = "USDT→CAD"
+        else:
+            source_label = currency
 
-    ref   = base["ref_price"]
-    our_sell = ref - SELL_SPREAD_TOMAN
-    our_buy  = ref - BUY_SPREAD_TOMAN
-    margin   = get_margin_by_amount(amount)
+        if not avg_sell:
+            return None
+
+        avg_buy = _get_avg_buy(currency, method)
+        ref      = avg_sell
+        our_sell = avg_sell - USD_CAD_SELL_MARGIN
+        our_buy  = (avg_buy + USD_CAD_BUY_MARGIN) if avg_buy else (avg_sell - USDT_BUY_SPREAD)
+
+    margin = get_margin_by_amount(amount)
 
     init_price_db()
     conn = sqlite3.connect(DB_PATH)
@@ -264,20 +340,28 @@ def calculate_rate(currency, amount=100):
             (currency, raw_source, our_sell, our_buy, updated_at)
         VALUES (?, ?, ?, ?, ?)
     """, (currency, ref, our_sell, our_buy, int(time.time())))
+    if method:
+        cur.execute("""
+            INSERT OR REPLACE INTO current_method_rates
+                (currency, payment_method, our_sell, our_buy,
+                 avg_comp_sell, avg_comp_buy, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (currency, method, our_sell, our_buy,
+              ref, _get_avg_buy(currency, method), int(time.time())))
     conn.commit()
     conn.close()
 
-    # Always keep JSON backup in sync with DB
     _write_price_json(currency, ref, our_sell, our_buy)
 
     return {
-        "currency":  currency,
-        "amount":    amount,
-        "margin":    margin,
-        "raw_source": ref,
-        "source_label": base["source"],
-        "our_sell":  our_sell,
-        "our_buy":   our_buy,
+        "currency":     currency,
+        "amount":       amount,
+        "margin":       margin,
+        "raw_source":   ref,
+        "source_label": source_label,
+        "our_sell":     our_sell,
+        "our_buy":      our_buy,
+        "payment_method": method or "general",
     }
 
 
