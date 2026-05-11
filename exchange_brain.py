@@ -83,10 +83,12 @@ def _is_business_hours() -> bool:
 
 
 def _detect_direction(text: str, history: list) -> str | None:
-    """Return 'buyer' | 'seller' | None from current text + recent history."""
+    """Return 'buyer' | 'seller' | None. Only reads user turns from history."""
     sell_kw = ["فروش", "sell", "میفروشم", "می‌فروشم", "می فروشم", "فروشی", "دارم فروش"]
     buy_kw  = ["خرید", "buy", "میخرم", "می‌خرم", "می خرم", "خریدار", "میخوام", "نیاز دارم"]
-    for t in [text] + [m for _, m in (history or [])[-4:]]:
+    # Only check current text + user messages in history (skip bot messages)
+    user_texts = [text] + [m for role, m in (history or [])[-6:] if role == "user"]
+    for t in user_texts:
         tl = t.lower()
         if any(k in tl for k in sell_kw):
             return "seller"
@@ -96,11 +98,12 @@ def _detect_direction(text: str, history: list) -> str | None:
 
 
 def _detect_method(text: str, history: list) -> str | None:
-    """Return 'etransfer' | 'cash' | 'cheque' | None from text + history."""
+    """Return 'etransfer' | 'cash' | 'cheque' | None. Only reads user turns."""
     etransfer_kw = ["حواله", "e-transfer", "etransfer", "ترنسفر", "اینترک", "interac"]
     cash_kw      = ["نقدی", "نقد", "cash", "کش"]
     cheque_kw    = ["چک", "cheque", "check"]
-    for t in [text] + [m for _, m in (history or [])[-4:]]:
+    user_texts = [text] + [m for role, m in (history or [])[-6:] if role == "user"]
+    for t in user_texts:
         tl = t.lower()
         if any(k in tl for k in etransfer_kw):
             return "etransfer"
