@@ -101,8 +101,6 @@ def _should_ignore(uid: int, text: str, event) -> str | None:
         return "outgoing"
     if _self_id and uid == _self_id:
         return "self_id"
-    if uid == ADMIN_ID:
-        return "admin_id"
     if uid in EXCLUDED_IDS:
         return "excluded"
     if getattr(event.message, "via_bot_id", None):

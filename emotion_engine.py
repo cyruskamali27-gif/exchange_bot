@@ -202,7 +202,8 @@ async def _hume_enrich(uid: int, text: str, base: dict, conv_id: int = None):
             for _ in range(24):
                 _time.sleep(0.5)
                 details = client.expression_measurement.batch.get_job_details(id=job_id)
-                status  = details.state.status.value
+                status_raw = details.state.status
+                status = status_raw.value if hasattr(status_raw, "value") else str(status_raw)
                 if status == "COMPLETED":
                     return client.expression_measurement.batch.get_job_predictions(id=job_id)
                 if status == "FAILED":
