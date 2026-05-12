@@ -457,21 +457,21 @@ async def process(uid: int, text: str, sender_name: str = "",
             if not _is_business_hours():
                 reply = "نرخ دلار و دلار کانادا فقط بین ساعت ۹ صبح تا ۵ عصر ارائه میشه."
                 _save_turn(uid, "bot", reply)
-                return reply, False
+                return reply, True
 
             # Must know buy/sell direction
             direction = _detect_direction(text, history)
             if not direction:
                 reply = "برای خرید می‌خواید یا فروش؟"
                 _save_turn(uid, "bot", reply)
-                return reply, False
+                return reply, True
 
             # Must know payment method
             method = _detect_method(text, history)
             if not method:
                 reply = "حواله، نقدی یا چک؟"
                 _save_turn(uid, "bot", reply)
-                return reply, False
+                return reply, True
 
             price_data = _get_live_price(currency, method=method)
         else:
@@ -556,5 +556,5 @@ async def process(uid: int, text: str, sender_name: str = "",
     if price_req and price_data:
         _save_pricing_decision(uid, price_data.get("our_sell", 0), currency)
 
-    log.info("[TEXT_REPLY] uid=%s reply_len=%d reply=%r", uid, len(reply), reply[:60])
-    return reply, False
+    log.info("[VOICE_REPLY] uid=%s reply_len=%d reply=%r", uid, len(reply), reply[:60])
+    return reply, True

@@ -15,7 +15,7 @@ from config import (
 from negotiation_agent import send_intro_message
 import exchange_brain
 from contacted_users import is_contacted, add as add_contacted
-from voice_agent import voice_to_text
+from voice_agent import voice_to_text, send_voice_message
 from natural_replies import get_reply
 from agent_memory import log_conversation, detect_customer_tone
 
@@ -272,10 +272,24 @@ async def run():
         # Groups are scan-only — always reply via private message
         sent_ok = False
         try:
-            await client.send_message(uid, reply)
-            sent_ok = True
+            if use_voice:
+                ok = await send_voice_message(client, uid, reply)
+                if ok:
+                    sent_ok = True
+                else:
+                    log.warning("[TTS_ERROR] uid=%s TTS failed — text fallback", uid)
+                    await client.send_message(uid, reply)
+                    sent_ok = True
+            else:
+                await client.send_message(uid, reply)
+                sent_ok = True
         except Exception as e:
-            log.error("[SEND_ERROR] uid=%s send failed: %s", uid, e)
+            log.error("[SEND_ERROR] uid=%s send failed: %s — emergency fallback", uid, e)
+            try:
+                await client.send_message(uid, reply)
+                sent_ok = True
+            except Exception as e2:
+                log.error("[SEND_ERROR] uid=%s emergency fallback failed: %s", uid, e2)
 
         log.info("[PRIVATE_REPLY_SENT] uid=%s sent_ok=%s len=%d preview=%r",
                  uid, sent_ok, len(reply), reply[:60])
@@ -416,13 +430,27 @@ async def run():
 
         _record_bot_reply(reply)
 
-        # ── Send reply (text-only mode) ───────────────────────────────
+        # ── Send reply ────────────────────────────────────────────────
         sent_ok = False
         try:
-            await client.send_message(uid, reply)
-            sent_ok = True
+            if use_voice:
+                ok = await send_voice_message(client, uid, reply)
+                if ok:
+                    sent_ok = True
+                else:
+                    log.warning("[TTS_ERROR] uid=%s TTS failed — text fallback", uid)
+                    await client.send_message(uid, reply)
+                    sent_ok = True
+            else:
+                await client.send_message(uid, reply)
+                sent_ok = True
         except Exception as e:
-            log.error("[SEND_ERROR] uid=%s send failed: %s", uid, e)
+            log.error("[SEND_ERROR] uid=%s send failed: %s — emergency fallback", uid, e)
+            try:
+                await client.send_message(uid, reply)
+                sent_ok = True
+            except Exception as e2:
+                log.error("[SEND_ERROR] uid=%s emergency fallback failed: %s", uid, e2)
 
         log.info("[PRIVATE_REPLY_SENT] uid=%s sent_ok=%s len=%d preview=%r",
                  uid, sent_ok, len(reply), reply[:60])
