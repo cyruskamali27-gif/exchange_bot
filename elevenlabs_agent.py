@@ -5,7 +5,7 @@ Voice flow:
   user text (from STT) → ConvAI WebSocket → collect audio chunks + reply text
   Caller converts audio bytes to OGG and sends as Telegram voice note.
 
-Uses ConvAI WebSocket only — no TTS endpoint, no voice_id.
+Uses ConvAI WebSocket only — agent_id driven, audio collected from stream.
 """
 
 import asyncio
