@@ -247,14 +247,17 @@ async def _hume_enrich(uid: int, text: str, base: dict, conv_id: int = None):
         log.debug("[HUME] enriched uid=%s emotion=%s", uid, enriched["dominant_emotion"])
 
     except asyncio.TimeoutError:
-        log.debug("[HUME] timeout uid=%s", uid)
+        log.warning("[HUME_FALLBACK] uid=%s timeout — using rule-based emotion", uid)
     except Exception as e:
         err = str(e).lower()
         if any(k in err for k in ("429", "rate", "limit", "quota", "unauthorized", "403")):
             _hume_rate_limit_until = _time.time() + _HUME_COOLDOWN_S
-            log.warning("[HUME] rate-limited/auth error — cooldown %ds | %s", _HUME_COOLDOWN_S, e)
+            log.warning("[HUME_FALLBACK] uid=%s rate-limited/auth — cooldown %ds | %s",
+                        uid, _HUME_COOLDOWN_S, e)
+        elif "504" in err or "gateway" in err:
+            log.warning("[HUME_FALLBACK] uid=%s gateway timeout — using rule-based emotion", uid)
         else:
-            log.error("[HUME] enrichment error uid=%s: %s", uid, e)
+            log.error("[HUME_FALLBACK] uid=%s enrichment error: %s", uid, e)
 
 
 # ─── Main entry point ─────────────────────────────────────────────────────────

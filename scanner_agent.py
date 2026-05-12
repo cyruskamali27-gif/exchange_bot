@@ -50,6 +50,18 @@ _PRICE_KEYWORDS = [
     "نرخ خرید", "نرخ فروش",
 ]
 
+# Keywords that force text-only routing for voice messages
+_VOICE_PRICE_KEYWORDS = [
+    "نرخ", "قیمت", "دلار", "تتر", "usdt", "usd", "cad",
+    "خرید", "فروش", "exchange rate", "price", "rate", "dollar", "tether",
+    "چنده", "چقدره", "چقدر", "کانادا",
+]
+
+
+def _is_rate_request(text: str) -> bool:
+    t = (text or "").lower()
+    return any(k in t for k in _VOICE_PRICE_KEYWORDS)
+
 _MARKETPLACE_BLACKLIST = [
     "فروش ماشین", "فروش خودرو", "فروش آپارتمان", "فروش ملک", "فروش موبایل",
     "فروش لپتاپ", "فروش تلویزیون", "فروش یخچال", "فروش لوازم",
@@ -265,27 +277,44 @@ async def run():
         # Groups are scan-only — always reply via private message
         sent_ok = False
         if customer_sent_voice:
-            # Voice in → ConvAI → audio out
-            try:
-                reply_text, audio_bytes = await elevenlabs_agent.chat_with_audio(uid, text)
-            except Exception as e:
-                log.error("[CONVAI] uid=%s failed: %s", uid, e)
-                reply_text, audio_bytes = "مشکلی پیش اومد، دوباره پیام بده.", b""
+            if _is_rate_request(text):
+                log.info("[VOICE_ROUTE] Rate intent detected: text-only uid=%s text=%r", uid, text[:60])
+                log.info("[VOICE_ROUTE] Voice disabled for pricing request uid=%s", uid)
+                try:
+                    reply, _ = await _handle_message(client, uid, text, True, sender_name)
+                except Exception as e:
+                    log.error("[BRAIN] uid=%s failed: %s", uid, e)
+                    reply = "مشکلی پیش اومد، دوباره پیام بده."
+                _record_bot_reply(reply)
+                try:
+                    await client.send_message(uid, reply)
+                    sent_ok = True
+                except Exception as e:
+                    log.error("[SEND_ERROR] uid=%s: %s", uid, e)
+                await _notify_admin_reply(uid, sender_name, text, reply, "voice_text")
+            else:
+                log.info("[VOICE_ROUTE] General intent: voice enabled uid=%s", uid)
+                # Voice in → ConvAI → audio out
+                try:
+                    reply_text, audio_bytes = await elevenlabs_agent.chat_with_audio(uid, text)
+                except Exception as e:
+                    log.error("[CONVAI] uid=%s failed: %s", uid, e)
+                    reply_text, audio_bytes = "مشکلی پیش اومد، دوباره پیام بده.", b""
 
-            _record_bot_reply(reply_text)
-            try:
-                if audio_bytes:
-                    ok = await send_convai_audio(client, uid, audio_bytes)
-                    sent_ok = ok
-                    if not ok:
+                _record_bot_reply(reply_text)
+                try:
+                    if audio_bytes:
+                        ok = await send_convai_audio(client, uid, audio_bytes)
+                        sent_ok = ok
+                        if not ok:
+                            await client.send_message(uid, reply_text)
+                            sent_ok = True
+                    else:
                         await client.send_message(uid, reply_text)
                         sent_ok = True
-                else:
-                    await client.send_message(uid, reply_text)
-                    sent_ok = True
-            except Exception as e:
-                log.error("[SEND_ERROR] uid=%s: %s", uid, e)
-            await _notify_admin_reply(uid, sender_name, text, reply_text, "voice")
+                except Exception as e:
+                    log.error("[SEND_ERROR] uid=%s: %s", uid, e)
+                await _notify_admin_reply(uid, sender_name, text, reply_text, "voice")
         else:
             # Text in → brain → text out
             try:
@@ -424,38 +453,56 @@ async def run():
 
         sent_ok = False
         if customer_sent_voice:
-            # ── Voice in → ConvAI → audio out ───────────────────────
-            log.info("[VOICE_STEP] uid=%s step=convai_start text=%r", uid, text[:60])
-            try:
-                reply_text, audio_bytes = await elevenlabs_agent.chat_with_audio(uid, text)
-                log.info("[VOICE_STEP] uid=%s step=convai_ok reply=%r audio=%d bytes",
-                         uid, reply_text[:80], len(audio_bytes))
-            except Exception as e:
-                log.error("[VOICE_STEP] uid=%s step=convai_FAIL err=%s", uid, e)
-                reply_text, audio_bytes = "مشکلی پیش اومد، دوباره پیام بده.", b""
+            if _is_rate_request(text):
+                log.info("[VOICE_ROUTE] Rate intent detected: text-only uid=%s text=%r", uid, text[:60])
+                log.info("[VOICE_ROUTE] Voice disabled for pricing request uid=%s", uid)
+                try:
+                    reply, _ = await _handle_message(client, uid, text, True, sender_name)
+                except Exception as e:
+                    log.error("[BRAIN] uid=%s failed: %s", uid, e)
+                    reply = "مشکلی پیش اومد، دوباره پیام بده."
+                _record_bot_reply(reply)
+                try:
+                    await client.send_message(uid, reply)
+                    sent_ok = True
+                except Exception as e:
+                    log.error("[SEND_ERROR] uid=%s: %s", uid, e)
+                await _notify_admin_reply(uid, sender_name, text, reply, "voice_text")
 
-            _record_bot_reply(reply_text)
-            try:
-                if audio_bytes:
-                    ok = await send_convai_audio(client, uid, audio_bytes)
-                    sent_ok = ok
-                    if not ok:
-                        log.warning("[VOICE_STEP] uid=%s audio send failed — text fallback", uid)
+            else:
+                log.info("[VOICE_ROUTE] General intent: voice enabled uid=%s", uid)
+                # ── Voice in → ConvAI → audio out ───────────────────────
+                log.info("[VOICE_STEP] uid=%s step=convai_start text=%r", uid, text[:60])
+                try:
+                    reply_text, audio_bytes = await elevenlabs_agent.chat_with_audio(uid, text)
+                    log.info("[VOICE_STEP] uid=%s step=convai_ok reply=%r audio=%d bytes",
+                             uid, reply_text[:80], len(audio_bytes))
+                except Exception as e:
+                    log.error("[VOICE_STEP] uid=%s step=convai_FAIL err=%s", uid, e)
+                    reply_text, audio_bytes = "مشکلی پیش اومد، دوباره پیام بده.", b""
+
+                _record_bot_reply(reply_text)
+                try:
+                    if audio_bytes:
+                        ok = await send_convai_audio(client, uid, audio_bytes)
+                        sent_ok = ok
+                        if not ok:
+                            log.warning("[VOICE_STEP] uid=%s audio send failed — text fallback", uid)
+                            await client.send_message(uid, reply_text)
+                            sent_ok = True
+                    else:
+                        log.warning("[VOICE_STEP] uid=%s no audio from ConvAI — text fallback", uid)
                         await client.send_message(uid, reply_text)
                         sent_ok = True
-                else:
-                    log.warning("[VOICE_STEP] uid=%s no audio from ConvAI — text fallback", uid)
-                    await client.send_message(uid, reply_text)
-                    sent_ok = True
-            except Exception as e:
-                log.error("[SEND_ERROR] uid=%s: %s", uid, e)
-                try:
-                    await client.send_message(uid, reply_text)
-                    sent_ok = True
-                except Exception:
-                    pass
+                except Exception as e:
+                    log.error("[SEND_ERROR] uid=%s: %s", uid, e)
+                    try:
+                        await client.send_message(uid, reply_text)
+                        sent_ok = True
+                    except Exception:
+                        pass
 
-            await _notify_admin_reply(uid, sender_name, text, reply_text, "voice")
+                await _notify_admin_reply(uid, sender_name, text, reply_text, "voice")
 
         else:
             # ── Text in → brain → text out ───────────────────────────
