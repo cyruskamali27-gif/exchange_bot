@@ -22,8 +22,7 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 TRON_API_KEY = os.environ.get("TRON_API_KEY", "")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 ELEVENLABS_API_KEY  = os.environ.get("ELEVENLABS_API_KEY", "")
-ELEVENLABS_VOICE_ID = os.environ.get("ELEVENLABS_VOICE_ID", "")
-VOICE_REPLIES_ENABLED = os.environ.get("VOICE_REPLIES_ENABLED", "true").lower() == "true"
+ELEVENLABS_AGENT_ID = os.environ.get("ELEVENLABS_AGENT_ID", "")
 ADMIN_APPROVAL_THRESHOLD = int(os.environ.get("ADMIN_APPROVAL_THRESHOLD", 1000))
 EXCLUDED_IDS = []
 

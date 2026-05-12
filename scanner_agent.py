@@ -15,7 +15,8 @@ from config import (
 from negotiation_agent import send_intro_message
 import exchange_brain
 from contacted_users import is_contacted, add as add_contacted
-from voice_agent import voice_to_text, send_voice_message
+from voice_agent import voice_to_text, send_convai_audio
+import elevenlabs_agent
 from natural_replies import get_reply
 from agent_memory import log_conversation, detect_customer_tone
 
@@ -261,41 +262,46 @@ async def run():
         sender_name = getattr(sender, "first_name", "") or getattr(sender, "username", "") or ""
         log.info("[GROUP_SCAN_ONLY] uid=%s — processing then replying privately", uid)
 
-        try:
-            reply, use_voice = await _handle_message(client, uid, text, customer_sent_voice, sender_name)
-        except Exception as e:
-            log.error("[VOICE_STEP] uid=%s step=brain_FAIL err=%s", uid, e)
-            reply, use_voice = "مشکلی پیش اومد، دوباره پیام بده.", False
-
-        _record_bot_reply(reply)
-
         # Groups are scan-only — always reply via private message
         sent_ok = False
-        try:
-            if use_voice:
-                ok = await send_voice_message(client, uid, reply)
-                if ok:
-                    sent_ok = True
+        if customer_sent_voice:
+            # Voice in → ConvAI → audio out
+            try:
+                reply_text, audio_bytes = await elevenlabs_agent.chat_with_audio(uid, text)
+            except Exception as e:
+                log.error("[CONVAI] uid=%s failed: %s", uid, e)
+                reply_text, audio_bytes = "مشکلی پیش اومد، دوباره پیام بده.", b""
+
+            _record_bot_reply(reply_text)
+            try:
+                if audio_bytes:
+                    ok = await send_convai_audio(client, uid, audio_bytes)
+                    sent_ok = ok
+                    if not ok:
+                        await client.send_message(uid, reply_text)
+                        sent_ok = True
                 else:
-                    log.warning("[TTS_ERROR] uid=%s TTS failed — text fallback", uid)
-                    await client.send_message(uid, reply)
+                    await client.send_message(uid, reply_text)
                     sent_ok = True
-            else:
-                await client.send_message(uid, reply)
-                sent_ok = True
-        except Exception as e:
-            log.error("[SEND_ERROR] uid=%s send failed: %s — emergency fallback", uid, e)
+            except Exception as e:
+                log.error("[SEND_ERROR] uid=%s: %s", uid, e)
+            await _notify_admin_reply(uid, sender_name, text, reply_text, "voice")
+        else:
+            # Text in → brain → text out
+            try:
+                reply, _ = await _handle_message(client, uid, text, False, sender_name)
+            except Exception as e:
+                log.error("[BRAIN] uid=%s failed: %s", uid, e)
+                reply = "مشکلی پیش اومد، دوباره پیام بده."
+            _record_bot_reply(reply)
             try:
                 await client.send_message(uid, reply)
                 sent_ok = True
-            except Exception as e2:
-                log.error("[SEND_ERROR] uid=%s emergency fallback failed: %s", uid, e2)
+            except Exception as e:
+                log.error("[SEND_ERROR] uid=%s: %s", uid, e)
+            await _notify_admin_reply(uid, sender_name, text, reply, "text")
 
-        log.info("[PRIVATE_REPLY_SENT] uid=%s sent_ok=%s len=%d preview=%r",
-                 uid, sent_ok, len(reply), reply[:60])
-
-        channel = "voice" if customer_sent_voice else "text"
-        await _notify_admin_reply(uid, sender_name, text, reply, channel)
+        log.info("[PRIVATE_REPLY_SENT] uid=%s sent_ok=%s", uid, sent_ok)
 
     # ── Production groups: lead detection + private outreach ─────
     @client.on(events.NewMessage)
@@ -416,47 +422,59 @@ async def run():
 
         sender_name = getattr(sender, "first_name", "") or getattr(sender, "username", "") or ""
 
-        # ── Brain (ElevenLabs / price engine) ────────────────────────
-        if customer_sent_voice:
-            log.info("[VOICE_STEP] uid=%s step=brain_start text=%r", uid, text[:60])
-        try:
-            reply, use_voice = await _handle_message(client, uid, text, customer_sent_voice, sender_name)
-            if customer_sent_voice:
-                log.info("[VOICE_STEP] uid=%s step=brain_ok reply_len=%d use_voice=%s",
-                         uid, len(reply), use_voice)
-        except Exception as e:
-            log.error("[VOICE_STEP] uid=%s step=brain_FAIL err=%s", uid, e)
-            reply, use_voice = "مشکلی پیش اومد، دوباره پیام بده.", False
-
-        _record_bot_reply(reply)
-
-        # ── Send reply ────────────────────────────────────────────────
         sent_ok = False
-        try:
-            if use_voice:
-                ok = await send_voice_message(client, uid, reply)
-                if ok:
-                    sent_ok = True
+        if customer_sent_voice:
+            # ── Voice in → ConvAI → audio out ───────────────────────
+            log.info("[VOICE_STEP] uid=%s step=convai_start text=%r", uid, text[:60])
+            try:
+                reply_text, audio_bytes = await elevenlabs_agent.chat_with_audio(uid, text)
+                log.info("[VOICE_STEP] uid=%s step=convai_ok reply=%r audio=%d bytes",
+                         uid, reply_text[:80], len(audio_bytes))
+            except Exception as e:
+                log.error("[VOICE_STEP] uid=%s step=convai_FAIL err=%s", uid, e)
+                reply_text, audio_bytes = "مشکلی پیش اومد، دوباره پیام بده.", b""
+
+            _record_bot_reply(reply_text)
+            try:
+                if audio_bytes:
+                    ok = await send_convai_audio(client, uid, audio_bytes)
+                    sent_ok = ok
+                    if not ok:
+                        log.warning("[VOICE_STEP] uid=%s audio send failed — text fallback", uid)
+                        await client.send_message(uid, reply_text)
+                        sent_ok = True
                 else:
-                    log.warning("[TTS_ERROR] uid=%s TTS failed — text fallback", uid)
-                    await client.send_message(uid, reply)
+                    log.warning("[VOICE_STEP] uid=%s no audio from ConvAI — text fallback", uid)
+                    await client.send_message(uid, reply_text)
                     sent_ok = True
-            else:
-                await client.send_message(uid, reply)
-                sent_ok = True
-        except Exception as e:
-            log.error("[SEND_ERROR] uid=%s send failed: %s — emergency fallback", uid, e)
+            except Exception as e:
+                log.error("[SEND_ERROR] uid=%s: %s", uid, e)
+                try:
+                    await client.send_message(uid, reply_text)
+                    sent_ok = True
+                except Exception:
+                    pass
+
+            await _notify_admin_reply(uid, sender_name, text, reply_text, "voice")
+
+        else:
+            # ── Text in → brain → text out ───────────────────────────
+            try:
+                reply, _ = await _handle_message(client, uid, text, False, sender_name)
+            except Exception as e:
+                log.error("[BRAIN] uid=%s failed: %s", uid, e)
+                reply = "مشکلی پیش اومد، دوباره پیام بده."
+
+            _record_bot_reply(reply)
             try:
                 await client.send_message(uid, reply)
                 sent_ok = True
-            except Exception as e2:
-                log.error("[SEND_ERROR] uid=%s emergency fallback failed: %s", uid, e2)
+            except Exception as e:
+                log.error("[SEND_ERROR] uid=%s: %s", uid, e)
 
-        log.info("[PRIVATE_REPLY_SENT] uid=%s sent_ok=%s len=%d preview=%r",
-                 uid, sent_ok, len(reply), reply[:60])
+            await _notify_admin_reply(uid, sender_name, text, reply, "text")
 
-        channel = "voice" if customer_sent_voice else "text"
-        await _notify_admin_reply(uid, sender_name, text, reply, channel)
+        log.info("[PRIVATE_REPLY_SENT] uid=%s sent_ok=%s", uid, sent_ok)
 
     await client.run_until_disconnected()
 
