@@ -22,7 +22,6 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 TRON_API_KEY = os.environ.get("TRON_API_KEY", "")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY", "")
-ELEVENLABS_VOICE_ID = os.environ.get("ELEVENLABS_VOICE_ID", "")
 ADMIN_APPROVAL_THRESHOLD = int(os.environ.get("ADMIN_APPROVAL_THRESHOLD", 1000))
 EXCLUDED_IDS = []
 
@@ -41,29 +40,12 @@ TIMEZONE             = os.environ.get("TIMEZONE", "America/Toronto")
 USD_CAD_OPEN_HOUR    = int(os.environ.get("USD_CAD_OPEN_HOUR",  "9"))
 USD_CAD_CLOSE_HOUR   = int(os.environ.get("USD_CAD_CLOSE_HOUR", "17"))
 
-# ─── ElevenLabs Conversational AI ────────────────────────────────
-ELEVENLABS_AGENT_ID = os.environ.get("ELEVENLABS_AGENT_ID", "agent_1101kr77twbhe1p9c7mpf1b7z2e3")
-
-# ─── Office ambience mixing ───────────────────────────────────────
-ENABLE_OFFICE_AMBIENCE  = os.environ.get("ENABLE_OFFICE_AMBIENCE", "true").lower() == "true"
-OFFICE_AMBIENCE_FILE    = os.environ.get("OFFICE_AMBIENCE_FILE", "/var/www/exchange_bot/assets/office_ambience.mp3")
-OFFICE_AMBIENCE_VOLUME  = float(os.environ.get("OFFICE_AMBIENCE_VOLUME", "0.04"))
-
-TWILIO_ACCOUNT_SID  = os.environ.get("TWILIO_ACCOUNT_SID", "")
-TWILIO_AUTH_TOKEN   = os.environ.get("TWILIO_AUTH_TOKEN", "")
-TWILIO_FROM_NUMBER  = os.environ.get("TWILIO_FROM_NUMBER", "")
 
 # ─── Safe / test mode ────────────────────────────────────────────
 SAFE_MODE        = os.environ.get("SAFE_MODE", "false").lower() == "true"
 TEST_GROUP_ONLY  = os.environ.get("TEST_GROUP_ONLY", "false").lower() == "true"
 TEST_GROUP_ID    = int(os.environ.get("TEST_GROUP_ID", "0"))
 
-# ─── Voice reply flags ────────────────────────────────────────────
-# Disabled by default: current ElevenLabs voice sounds non-Iranian.
-# Set VOICE_REPLIES_ENABLED=true in .env only after accent is verified.
-VOICE_REPLIES_ENABLED       = os.environ.get("VOICE_REPLIES_ENABLED", "false").lower() == "true"
-PRICE_REPLIES_ALWAYS_TEXT   = os.environ.get("PRICE_REPLIES_ALWAYS_TEXT", "true").lower() == "true"
-DISABLE_VOICE_IF_ACCENT_BAD = os.environ.get("DISABLE_VOICE_IF_ACCENT_BAD", "true").lower() == "true"
 
 # ─── Hume AI emotion intelligence ────────────────────────────────
 HUME_API_KEY        = os.environ.get("HUME_API_KEY", "")

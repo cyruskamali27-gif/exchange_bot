@@ -26,7 +26,7 @@ from zoneinfo import ZoneInfo
 
 from config import (
     ADMIN_ID, BOT_TOKEN, GEMINI_API_KEY,
-    BUY_SPREAD_TOMAN, SELL_SPREAD_TOMAN, VOICE_REPLIES_ENABLED,
+    BUY_SPREAD_TOMAN, SELL_SPREAD_TOMAN,
     TIMEZONE, USD_CAD_OPEN_HOUR, USD_CAD_CLOSE_HOUR,
 )
 from price_engine import calculate_rate
@@ -48,6 +48,12 @@ try:
     log.info("[BRAIN] Gemini ready")
 except Exception as _e:
     log.warning("[BRAIN] Gemini unavailable: %s", _e)
+
+# ─── ElevenLabs Agent — disabled ─────────────────────────────────────────────
+
+_ELEVEN_OK = False
+_eleven_chat = None
+log.info("[BRAIN] ElevenLabs Agent disabled — Gemini handles all text replies")
 
 # ─── Price keyword detection ──────────────────────────────────────────────────
 
@@ -270,11 +276,18 @@ def _get_live_price(currency: str, method: str = None) -> dict | None:
         entry = data.get(currency)
         if entry and entry.get("price"):
             p = int(entry["price"])
+            # Use pre-computed values from price_engine when available;
+            # USDT has 0 sell spread — don't apply SELL_SPREAD_TOMAN (500) here.
+            our_sell = (entry.get("our_sell")
+                        or (p if currency == "USDT" else p - SELL_SPREAD_TOMAN))
+            our_buy  = (entry.get("our_buy")
+                        or entry.get("buy")
+                        or p - BUY_SPREAD_TOMAN)
             return {
                 "currency":   currency,
                 "raw_source": p,
-                "our_sell":   p - SELL_SPREAD_TOMAN,
-                "our_buy":    p - BUY_SPREAD_TOMAN,
+                "our_sell":   int(our_sell),
+                "our_buy":    int(our_buy),
                 "amount":     0,
                 "margin":     0,
                 "payment_method": method or "general",
@@ -397,45 +410,6 @@ def _build_prompt(uid: int, text: str, profile: dict, emotion: dict,
     )
 
 
-# ─── Voice/text decision ─────────────────────────────────────────────────────
-
-# Per-uid conversation timing for Rule 3 (text→voice escalation after 60s)
-_conv_start: dict[int, dict] = {}
-_last_msg:   dict[int, float] = {}
-_RESET_IDLE = 300  # 5 min idle resets conversation type
-_ESCALATE_S = 60   # 60s text conversation switches to voice
-
-
-def _decide_voice(uid: int, is_voice_in: bool, is_price: bool,
-                  profile: dict, emotion: dict) -> bool:
-    if not VOICE_REPLIES_ENABLED:
-        return False
-    if is_price:
-        return False  # Rule 4: price → always text
-
-    now = time.time()
-    start = _conv_start.get(uid)
-
-    # Reset stale conversation
-    if start and (now - _last_msg.get(uid, now)) > _RESET_IDLE:
-        _conv_start.pop(uid, None)
-        start = None
-
-    _last_msg[uid] = now
-
-    if start is None:
-        _conv_start[uid] = {"time": now, "type": "voice" if is_voice_in else "text"}
-        start = _conv_start[uid]
-
-    if is_voice_in:           # Rule 2
-        return True
-    if profile.get("prefers_voice"):
-        return True
-    if (start["type"] == "text"  # Rule 3
-            and (now - start["time"]) > _ESCALATE_S):
-        return True
-    return False               # Rule 1: text → text
-
 
 # ─── Main entry point ─────────────────────────────────────────────────────────
 
@@ -445,6 +419,7 @@ async def process(uid: int, text: str, sender_name: str = "",
     Central message processor. Returns (reply_text, use_voice).
     Never invents prices. Uses only live DB/JSON data.
     """
+    log.info("[BRAIN_IN] uid=%s voice=%s text=%r", uid, is_voice_input, text[:60])
     _ensure_profile(uid, sender_name)
 
     # ── 1. Load context ──────────────────────────────────────────
@@ -459,6 +434,8 @@ async def process(uid: int, text: str, sender_name: str = "",
     # ── 3. Price detection ───────────────────────────────────────
     price_req = is_price_request(text)
     currency  = detect_currency(text)
+    log.info("[INTENT_DETECTED] uid=%s price_req=%s currency=%s emotion=%s",
+             uid, price_req, currency, emotion.get("dominant_emotion"))
 
     # ── 4. Save user turn ────────────────────────────────────────
     _save_turn(uid, "user", text, was_voice=is_voice_input, emotion=emotion["dominant_emotion"])
@@ -474,13 +451,13 @@ async def process(uid: int, text: str, sender_name: str = "",
     # ── 6. Business rules for price requests ─────────────────────
     price_data = None
     if price_req:
+        log.info("[PRICE_REQUEST] uid=%s currency=%s", uid, currency)
         if currency != "USDT":
             # USD/CAD: time-gated
             if not _is_business_hours():
                 reply = "نرخ دلار و دلار کانادا فقط بین ساعت ۹ صبح تا ۵ عصر ارائه میشه."
                 _save_turn(uid, "bot", reply)
-                use_voice = _decide_voice(uid, is_voice_input, True, profile, emotion)
-                return reply, use_voice
+                return reply, False
 
             # Must know buy/sell direction
             direction = _detect_direction(text, history)
@@ -503,10 +480,42 @@ async def process(uid: int, text: str, sender_name: str = "",
             direction = _detect_direction(text, history)
             price_data = _get_live_price("USDT")
 
+        log.info("[PRICE_REQUEST] uid=%s price_data=%s",
+                 uid, bool(price_data))
+
     # ── 7. Generate reply ────────────────────────────────────────
     if price_req and not price_data:
+        log.info("[ROUTE] using local price engine uid=%s (no data available)", uid)
         reply = "نرخ الان تابلوئه، چند دقیقه دیگه دوباره پیام بدید."
+        log.warning("[PRICE_REQUEST] uid=%s no live price data available", uid)
+
+    elif price_req:
+        # Price data available — local engine supplied numbers, Gemini formats reply
+        log.info("[ROUTE] using local price engine uid=%s currency=%s", uid, currency)
+        if _GEMINI_OK:
+            prompt = _build_prompt(
+                uid, text, profile, emotion, fp, history,
+                price_data, mistakes, price_req, currency
+            )
+            try:
+                resp = await asyncio.to_thread(
+                    lambda: _gemini.models.generate_content(
+                        model="gemini-2.5-flash", contents=prompt
+                    ).text.strip()
+                )
+                reply = resp
+            except Exception as e:
+                log.error("[ERROR] uid=%s Gemini price-format error: %s", uid, e)
+                _lbl = {"USDT": "تتر", "USD": "دلار", "CAD": "دلار کانادا"}.get(currency, currency)
+                reply = (f"فروش {_lbl}: {price_data.get('our_sell', 0):,} تومان — "
+                         f"خرید: {price_data.get('our_buy', 0):,} تومان")
+        else:
+            _lbl = {"USDT": "تتر", "USD": "دلار", "CAD": "دلار کانادا"}.get(currency, currency)
+            reply = (f"فروش {_lbl}: {price_data.get('our_sell', 0):,} تومان — "
+                     f"خرید: {price_data.get('our_buy', 0):,} تومان")
+
     elif _GEMINI_OK:
+        log.info("[ROUTE] using Gemini uid=%s", uid)
         prompt = _build_prompt(
             uid, text, profile, emotion, fp, history,
             price_data, mistakes, price_req, currency
@@ -519,10 +528,11 @@ async def process(uid: int, text: str, sender_name: str = "",
             )
             reply = resp
         except Exception as e:
-            log.error("[BRAIN] Gemini error: %s", e)
-            reply = get_reply("customer_buy")
+            log.error("[ERROR] uid=%s Gemini error: %s", uid, e)
+            reply = "مشکلی پیش اومد، دوباره پیام بده."
+
     else:
-        reply = get_reply("customer_buy")
+        reply = "مشکلی پیش اومد، دوباره پیام بده."
 
     # Strip status tags from text sent to customer
     reply = re.sub(r'\[(CONFIRMED|BARGAINING|SILENT)\]', '', reply).strip()
@@ -546,7 +556,5 @@ async def process(uid: int, text: str, sender_name: str = "",
     if price_req and price_data:
         _save_pricing_decision(uid, price_data.get("our_sell", 0), currency)
 
-    # ── 9. Decide voice — price requests always text ──────────────
-    use_voice = _decide_voice(uid, is_voice_input, price_req, profile, emotion)
-
-    return reply, use_voice
+    log.info("[TEXT_REPLY] uid=%s reply_len=%d reply=%r", uid, len(reply), reply[:60])
+    return reply, False

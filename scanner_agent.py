@@ -10,13 +10,12 @@ from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from config import (
     TELETHON_API_ID, TELETHON_API_HASH, TELETHON_PHONE,
     ADMIN_ID, BOT_TOKEN, EXCLUDED_IDS,
-    VOICE_REPLIES_ENABLED,
     TEST_GROUP_ONLY, TEST_GROUP_ID,
 )
 from negotiation_agent import send_intro_message
 import exchange_brain
 from contacted_users import is_contacted, add as add_contacted
-from voice_agent import voice_to_text, send_voice_message
+from voice_agent import voice_to_text
 from natural_replies import get_reply
 from agent_memory import log_conversation, detect_customer_tone
 
@@ -49,8 +48,6 @@ _PRICE_KEYWORDS = [
     "دلار", "usd", "cad", "کانادا",
     "نرخ خرید", "نرخ فروش",
 ]
-
-_VOICE_ESCALATE_SECONDS = 60
 
 _MARKETPLACE_BLACKLIST = [
     "فروش ماشین", "فروش خودرو", "فروش آپارتمان", "فروش ملک", "فروش موبایل",
@@ -208,8 +205,8 @@ async def run():
     log.info("[SCANNER] Started — self_id=%s (self-messages will be blocked)", _self_id)
 
     if TEST_GROUP_ONLY:
-        print(f"⚠️  TEST_GROUP_ONLY=true — فقط گروه تست ({TEST_GROUP_ID}) فعال است")
-        print("   پیام‌های خصوصی و سایر گروه‌ها نادیده گرفته می‌شوند")
+        print(f"⚠️  TEST_GROUP_ONLY=true — گروه تست ({TEST_GROUP_ID}) فعال است")
+        print("   سایر گروه‌های تولید نادیده گرفته می‌شوند — پیام خصوصی همیشه پردازش می‌شود")
     print("✅ Scanner running...")
 
     # ── Debug: log ALL messages (including outgoing) ─────────────
@@ -226,13 +223,30 @@ async def run():
         sender = await event.get_sender()
         uid = sender.id
         customer_sent_voice = False
+        text = ""
 
         if event.message.voice:
             customer_sent_voice = True
-            audio = await event.download_media(bytes)
-            text = await voice_to_text(audio)
-            if not text:
+            log.info("[VOICE_STEP] uid=%s step=download_start", uid)
+            try:
+                audio = await event.download_media(bytes)
+                log.info("[VOICE_STEP] uid=%s step=download_ok bytes=%d", uid, len(audio) if audio else 0)
+            except Exception as e:
+                log.error("[VOICE_STEP] uid=%s step=download_FAIL err=%s", uid, e)
                 return
+
+            log.info("[VOICE_STEP] uid=%s step=stt_start", uid)
+            try:
+                text = await voice_to_text(audio)
+                log.info("[VOICE_STEP] uid=%s step=stt_ok text=%r", uid, (text or "")[:80])
+            except Exception as e:
+                log.error("[VOICE_STEP] uid=%s step=stt_FAIL err=%s", uid, e)
+                return
+
+            if not text:
+                log.warning("[VOICE_STEP] uid=%s step=stt_empty — no transcription", uid)
+                return
+            log.info("[VOICE_ROUTE] transcribed_text=%r uid=%s", text[:100], uid)
         else:
             text = event.message.message or ""
 
@@ -247,20 +261,24 @@ async def run():
         sender_name = getattr(sender, "first_name", "") or getattr(sender, "username", "") or ""
         log.info("[GROUP_SCAN_ONLY] uid=%s — processing then replying privately", uid)
 
-        reply, use_voice = await _handle_message(client, uid, text, customer_sent_voice, sender_name)
+        try:
+            reply, use_voice = await _handle_message(client, uid, text, customer_sent_voice, sender_name)
+        except Exception as e:
+            log.error("[VOICE_STEP] uid=%s step=brain_FAIL err=%s", uid, e)
+            reply, use_voice = "مشکلی پیش اومد، دوباره پیام بده.", False
+
         _record_bot_reply(reply)
 
         # Groups are scan-only — always reply via private message
+        sent_ok = False
         try:
-            if use_voice:
-                ok = await send_voice_message(client, uid, reply)
-                if not ok:
-                    await client.send_message(uid, reply)
-            else:
-                await client.send_message(uid, reply)
-            log.info("[PRIVATE_LEAD_STARTED] uid=%s reply sent privately", uid)
+            await client.send_message(uid, reply)
+            sent_ok = True
         except Exception as e:
-            log.error("[SCANNER] Private reply failed uid=%s: %s", uid, e)
+            log.error("[SEND_ERROR] uid=%s send failed: %s", uid, e)
+
+        log.info("[PRIVATE_REPLY_SENT] uid=%s sent_ok=%s len=%d preview=%r",
+                 uid, sent_ok, len(reply), reply[:60])
 
         channel = "voice" if customer_sent_voice else "text"
         await _notify_admin_reply(uid, sender_name, text, reply, channel)
@@ -319,22 +337,58 @@ async def run():
     # ── Private chat: full conversation handler ──────────────────
     @client.on(events.NewMessage(incoming=True))
     async def private_handler(event):
-        if TEST_GROUP_ONLY:
-            return
+        # TEST_GROUP_ONLY only blocks production group scanning,
+        # NOT private replies — users who were redirected privately must be served.
         if event.out or not event.is_private:
             return
 
         sender = await event.get_sender()
         uid = sender.id
         customer_sent_voice = False
+        text = ""
 
         if event.message.voice:
             customer_sent_voice = True
-            audio = await event.download_media(bytes)
-            text = await voice_to_text(audio)
-            if not text:
-                await event.respond("نشنیدم، دوباره بگو.")
+            log.info("[VOICE_STEP] uid=%s step=telegram_voice_received", uid)
+
+            # ── Download ─────────────────────────────────────────────
+            log.info("[VOICE_STEP] uid=%s step=download_start", uid)
+            try:
+                audio = await event.download_media(bytes)
+                if not audio:
+                    raise ValueError("Empty audio bytes")
+                log.info("[VOICE_STEP] uid=%s step=download_ok bytes=%d", uid, len(audio))
+            except Exception as e:
+                log.error("[VOICE_STEP] uid=%s step=download_FAIL err=%s", uid, e)
+                try:
+                    await event.respond("مشکل در دریافت فایل صوتی، دوباره بفرست.")
+                except Exception:
+                    pass
                 return
+
+            # ── STT ──────────────────────────────────────────────────
+            log.info("[VOICE_STEP] uid=%s step=stt_start", uid)
+            try:
+                text = await voice_to_text(audio)
+                log.info("[VOICE_STEP] uid=%s step=stt_ok text=%r", uid, (text or "")[:80])
+            except Exception as e:
+                log.error("[VOICE_STEP] uid=%s step=stt_FAIL err=%s", uid, e)
+                try:
+                    await event.respond("نشنیدم، دوباره بگو.")
+                except Exception:
+                    pass
+                return
+
+            if not text:
+                log.warning("[VOICE_STEP] uid=%s step=stt_empty — STT returned nothing", uid)
+                try:
+                    await event.respond("نشنیدم، دوباره بگو.")
+                except Exception:
+                    pass
+                return
+
+            log.info("[VOICE_ROUTE] transcribed_text=%r uid=%s", text[:100], uid)
+
         else:
             text = event.message.message or ""
 
@@ -347,15 +401,31 @@ async def run():
             return
 
         sender_name = getattr(sender, "first_name", "") or getattr(sender, "username", "") or ""
-        reply, use_voice = await _handle_message(client, uid, text, customer_sent_voice, sender_name)
+
+        # ── Brain (ElevenLabs / price engine) ────────────────────────
+        if customer_sent_voice:
+            log.info("[VOICE_STEP] uid=%s step=brain_start text=%r", uid, text[:60])
+        try:
+            reply, use_voice = await _handle_message(client, uid, text, customer_sent_voice, sender_name)
+            if customer_sent_voice:
+                log.info("[VOICE_STEP] uid=%s step=brain_ok reply_len=%d use_voice=%s",
+                         uid, len(reply), use_voice)
+        except Exception as e:
+            log.error("[VOICE_STEP] uid=%s step=brain_FAIL err=%s", uid, e)
+            reply, use_voice = "مشکلی پیش اومد، دوباره پیام بده.", False
+
         _record_bot_reply(reply)
 
-        if use_voice:
-            ok = await send_voice_message(client, uid, reply)
-            if not ok:
-                await client.send_message(uid, reply)
-        else:
+        # ── Send reply (text-only mode) ───────────────────────────────
+        sent_ok = False
+        try:
             await client.send_message(uid, reply)
+            sent_ok = True
+        except Exception as e:
+            log.error("[SEND_ERROR] uid=%s send failed: %s", uid, e)
+
+        log.info("[PRIVATE_REPLY_SENT] uid=%s sent_ok=%s len=%d preview=%r",
+                 uid, sent_ok, len(reply), reply[:60])
 
         channel = "voice" if customer_sent_voice else "text"
         await _notify_admin_reply(uid, sender_name, text, reply, channel)
