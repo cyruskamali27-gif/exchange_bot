@@ -3,10 +3,10 @@ ElevenLabs Conversational AI — audio mode.
 
 Voice flow:
   user text (from STT) → ConvAI WebSocket → collect audio chunks + reply text
-  Caller converts audio bytes to OGG and sends as Telegram voice note.
+  Caller converts PCM audio bytes to OGG and sends as Telegram voice note.
 
-Per-session conversation_config_override controls greeting/no-greeting behavior.
-Banned-phrase detection triggers one regeneration with a stricter prompt.
+No greeting injection. No prompt overrides. No per-user state.
+The ElevenLabs agent manages its own personality and greeting behavior.
 """
 
 import asyncio
@@ -24,60 +24,6 @@ _WS_BASE       = "wss://api.elevenlabs.io/v1/convai/conversation"
 _TIMEOUT       = 30
 _AUDIO_DRAIN_S = 3.0
 
-# ── Per-session system prompts ────────────────────────────────────────────────
-
-_PROMPT_FIRST = (
-    "You are Sahar, voice receptionist of Cyrus Global Exchange, Toronto, Canada. "
-    "Language: Persian (Farsi), modern Tehran dialect. "
-    "This is the FIRST message — open with exactly: "
-    "«سلام، سحر هستم از صرافی سیروس، بفرمایید در خدمتم.» "
-    "Then answer the customer question briefly. "
-    "Keep responses 1-2 short sentences. Calm and professional. "
-    "No emojis. No مشتری گرامی. No کاربر محترم. "
-    "For rate/price questions: say «برای نرخ، لطفاً پیام متنی بفرستید.»"
-)
-
-_PROMPT_SUBSEQUENT = (
-    "You are Sahar, voice receptionist of Cyrus Global Exchange, Toronto, Canada. "
-    "Language: Persian (Farsi), modern Tehran dialect. "
-    "STRICT RULE: Do NOT say سلام. Do NOT greet. Do NOT introduce yourself. "
-    "Do NOT say چطور می‌تونم کمک کنم or چجوری می‌تونم کمک کنم or any helper phrase. "
-    "Start your response immediately with the direct answer. "
-    "Keep responses 1-2 short sentences. Calm and professional. "
-    "No emojis. No مشتری گرامی. No کاربر محترم. "
-    "For rate/price questions: say «برای نرخ، لطفاً پیام متنی بفرستید.»"
-)
-
-_PROMPT_REGEN = (
-    "You are Sahar, voice receptionist of Cyrus Global Exchange, Toronto, Canada. "
-    "Language: Persian (Farsi), modern Tehran dialect. "
-    "CRITICAL: Your very first word must be part of the answer — not a greeting, "
-    "not an introduction, not a helper phrase. "
-    "No سلام. No چطور. No کمک کنم. "
-    "1-2 sentences maximum. Direct answer only."
-)
-
-# Prepended to user_text for non-first messages as extra LLM instruction
-_NO_GREET_PREPEND = (
-    "بدون سلام، بدون معرفی، بدون عبارت چطور می‌تونم کمک کنم. "
-    "فقط مستقیم جواب بده.\n"
-)
-
-# ── Banned phrases — trigger one regeneration ────────────────────────────────
-
-_BANNED = [
-    "چجوری می‌تونم کمک کنم",
-    "چطور می‌تونم کمک کنم",
-    "چگونه می‌تونم کمک کنم",
-    "how can i help you",
-    "how may i assist you",
-]
-
-
-def _has_banned(text: str) -> bool:
-    t = text.lower()
-    return any(p.lower() in t for p in _BANNED)
-
 
 def _pong(msg: dict) -> str:
     eid = msg.get("ping_event", {}).get("event_id", 0)
@@ -90,39 +36,29 @@ def _extract_text(msg: dict) -> str:
     return _re.sub(r"\s*\[[^\]]*\]\s*", " ", raw).strip()
 
 
-async def chat_with_audio(uid: int, text: str, is_first_message: bool = True) -> tuple[str, bytes]:
+async def chat_with_audio(uid: int, text: str) -> tuple[str, bytes]:
     """
     Send *text* to ElevenLabs ConvAI agent.
     Returns (reply_text, audio_bytes) — audio is raw PCM 16kHz.
-    is_first_message=True → greeting included; False → no greeting, direct answer.
-    Regenerates once if a banned phrase is detected in the reply text.
+    Text is sent as-is — no greeting injection, no prompt prepending.
     """
     if not ELEVENLABS_API_KEY or not ELEVENLABS_AGENT_ID:
         raise RuntimeError("ElevenLabs credentials not configured")
 
-    if is_first_message:
-        prompt    = _PROMPT_FIRST
-        first_msg = "سلام، سحر هستم از صرافی سیروس، بفرمایید در خدمتم."
-        user_text = text
-        drain_s   = 5.0
-    else:
-        prompt    = _PROMPT_SUBSEQUENT
-        first_msg = ""
-        user_text = _NO_GREET_PREPEND + text
-        drain_s   = 1.0
+    log.info("[ELEVEN_WS] uid=%s connecting", uid)
+    log.info("[ELEVEN_WS] uid=%s no greeting injected by Telegram code", uid)
 
-    log.info("[ELEVEN_WS] uid=%s connecting first=%s", uid, is_first_message)
-    reply_text, audio_bytes = await _ws_call(uid, user_text, prompt, first_msg, drain_s)
-
-    if _has_banned(reply_text):
-        log.warning("[ELEVEN_REGEN] uid=%s banned phrase in reply=%r — regenerating",
-                    uid, reply_text[:80])
-        reply_text, audio_bytes = await _ws_call(
-            uid, _NO_GREET_PREPEND + text, _PROMPT_REGEN, "", 1.0
-        )
-        if _has_banned(reply_text):
-            log.warning("[ELEVEN_REGEN] uid=%s banned phrase still present after regen: %r",
-                        uid, reply_text[:80])
+    uri = f"{_WS_BASE}?agent_id={ELEVENLABS_AGENT_ID}"
+    import websockets
+    try:
+        async with websockets.connect(
+            uri,
+            additional_headers={"xi-api-key": ELEVENLABS_API_KEY},
+        ) as ws:
+            reply_text, audio_bytes = await _run_conversation(ws, uid, text)
+    except Exception as e:
+        log.error("[ELEVEN_WS] uid=%s websocket error: %s", uid, e)
+        raise
 
     if not reply_text and not audio_bytes:
         raise ValueError("No response from ElevenLabs ConvAI")
@@ -132,20 +68,7 @@ async def chat_with_audio(uid: int, text: str, is_first_message: bool = True) ->
     return reply_text, audio_bytes
 
 
-async def _ws_call(uid: int, user_text: str, prompt: str,
-                   first_message: str, drain_s: float) -> tuple[str, bytes]:
-    uri = f"{_WS_BASE}?agent_id={ELEVENLABS_AGENT_ID}"
-    import websockets
-    async with websockets.connect(
-        uri,
-        additional_headers={"xi-api-key": ELEVENLABS_API_KEY},
-    ) as ws:
-        return await _run_conversation(ws, uid, user_text, prompt, first_message, drain_s)
-
-
-async def _run_conversation(ws, uid: int, user_text: str,
-                            prompt: str, first_message: str,
-                            drain_s: float) -> tuple[str, bytes]:
+async def _run_conversation(ws, uid: int, user_text: str) -> tuple[str, bytes]:
     loop = asyncio.get_running_loop()
 
     async def _recv(timeout=_TIMEOUT):
@@ -162,42 +85,32 @@ async def _run_conversation(ws, uid: int, user_text: str,
             log.info("[ELEVEN_P1] uid=%s metadata received", uid)
             break
 
-    # ── Phase 2: send initiation with per-session prompt override ────
-    init_data = {
-        "type": "conversation_initiation_client_data",
-        "conversation_config_override": {
-            "agent": {
-                "prompt": {"prompt": prompt},
-                "first_message": first_message,
-            }
-        }
-    }
-    await ws.send(json.dumps(init_data))
-    log.info("[ELEVEN_P2] uid=%s sent initiation has_greeting=%s", uid, bool(first_message))
+    # ── Phase 2: send initiation (no overrides) ──────────────────────
+    await ws.send(json.dumps({"type": "conversation_initiation_client_data"}))
+    log.info("[ELEVEN_P2] uid=%s sent initiation_client_data", uid)
 
-    # ── Phase 2.5: drain agent opening greeting ──────────────────────
-    _deadline = loop.time() + drain_s
+    # ── Phase 2.5: short drain in case agent sends an opening message ─
+    _deadline = loop.time() + 1.0
     while True:
         _rem = _deadline - loop.time()
         if _rem <= 0:
-            log.info("[ELEVEN_P25] uid=%s deadline — no greeting", uid)
             break
         try:
             raw = await asyncio.wait_for(ws.recv(), timeout=_rem)
         except (asyncio.TimeoutError, TimeoutError):
-            log.info("[ELEVEN_P25] uid=%s timeout — no greeting", uid)
             break
         pre = json.loads(raw)
         ptype = pre.get("type", "")
         if ptype == "ping":
             await ws.send(_pong(pre))
         elif ptype == "agent_response":
-            log.info("[ELEVEN_P25] uid=%s greeting drained", uid)
+            log.info("[ELEVEN_P25] uid=%s drained unexpected opening message", uid)
             break
         elif ptype == "conversation_ended":
-            raise ValueError("Conversation ended before user message could be sent")
+            log.warning("[ELEVEN_P25] uid=%s conversation_ended early", uid)
+            raise ValueError("Conversation ended before user message")
 
-    # ── Phase 3: send user message ───────────────────────────────────
+    # ── Phase 3: send user message exactly as transcribed ────────────
     await ws.send(json.dumps({"type": "user_message", "text": user_text}))
     log.info("[ELEVEN_P3] uid=%s sent user_message: %r", uid, user_text[:80])
 
@@ -207,11 +120,12 @@ async def _run_conversation(ws, uid: int, user_text: str,
     got_response = False
     end_deadline: float | None = None
 
-    log.info("[ELEVEN_P4] uid=%s collecting response (timeout=%ds)", uid, _TIMEOUT)
+    log.info("[ELEVEN_P4] uid=%s collecting response", uid)
     while True:
         if end_deadline is not None:
             remaining = end_deadline - loop.time()
             if remaining <= 0:
+                log.info("[ELEVEN_P4] uid=%s audio drain complete", uid)
                 break
             timeout = min(remaining, _TIMEOUT)
         else:
@@ -220,6 +134,7 @@ async def _run_conversation(ws, uid: int, user_text: str,
         try:
             raw = await asyncio.wait_for(ws.recv(), timeout=timeout)
         except (asyncio.TimeoutError, TimeoutError):
+            log.warning("[ELEVEN_P4] uid=%s recv timeout — stopping collection", uid)
             break
 
         msg   = json.loads(raw)
@@ -242,7 +157,7 @@ async def _run_conversation(ws, uid: int, user_text: str,
             end_deadline = loop.time() + _AUDIO_DRAIN_S
 
         elif mtype == "conversation_ended":
-            log.info("[ELEVEN_P4] uid=%s conversation_ended", uid)
+            log.info("[ELEVEN_P4] uid=%s conversation_ended by server", uid)
             break
 
         elif mtype in ("user_transcript", "agent_response_correction"):
@@ -252,6 +167,8 @@ async def _run_conversation(ws, uid: int, user_text: str,
             log.debug("[ELEVEN_P4] uid=%s ignored type=%s", uid, mtype)
 
     audio_bytes = b"".join(audio_chunks)
-    log.info("[ELEVEN_P4] uid=%s finished — got_response=%s audio_chunks=%d total_bytes=%d",
+    if not audio_chunks:
+        log.warning("[ELEVEN_P4] uid=%s no audio chunks — ConvAI returned no audio", uid)
+    log.info("[ELEVEN_P4] uid=%s finished — got_response=%s chunks=%d bytes=%d",
              uid, got_response, len(audio_chunks), len(audio_bytes))
     return reply_text, audio_bytes
