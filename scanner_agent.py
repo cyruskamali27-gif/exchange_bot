@@ -32,6 +32,9 @@ _self_id: int | None = None
 _recent_bot_replies: dict[str, float] = {}
 _LOOP_WINDOW_S = 300
 
+# First-voice-message state: uid → True means greeting already sent
+_voice_first_sent: set[int] = set()
+
 # Text patterns that only appear in bot/admin messages — drop immediately
 _BOT_TEXT_PATTERNS = [
     "/start", "پنل مدیریت صرافی", "برای دیدن پنل",
@@ -294,9 +297,12 @@ async def run():
                 await _notify_admin_reply(uid, sender_name, text, reply, "voice_text")
             else:
                 log.info("[VOICE_ROUTE] General intent: voice enabled uid=%s", uid)
+                is_first = uid not in _voice_first_sent
+                _voice_first_sent.add(uid)
                 # Voice in → ConvAI → audio out
                 try:
-                    reply_text, audio_bytes = await elevenlabs_agent.chat_with_audio(uid, text)
+                    reply_text, audio_bytes = await elevenlabs_agent.chat_with_audio(
+                        uid, text, is_first_message=is_first)
                 except Exception as e:
                     log.error("[CONVAI] uid=%s failed: %s", uid, e)
                     reply_text, audio_bytes = "مشکلی پیش اومد، دوباره پیام بده.", b""
@@ -471,10 +477,14 @@ async def run():
 
             else:
                 log.info("[VOICE_ROUTE] General intent: voice enabled uid=%s", uid)
+                is_first = uid not in _voice_first_sent
+                _voice_first_sent.add(uid)
                 # ── Voice in → ConvAI → audio out ───────────────────────
-                log.info("[VOICE_STEP] uid=%s step=convai_start text=%r", uid, text[:60])
+                log.info("[VOICE_STEP] uid=%s step=convai_start first=%s text=%r",
+                         uid, is_first, text[:60])
                 try:
-                    reply_text, audio_bytes = await elevenlabs_agent.chat_with_audio(uid, text)
+                    reply_text, audio_bytes = await elevenlabs_agent.chat_with_audio(
+                        uid, text, is_first_message=is_first)
                     log.info("[VOICE_STEP] uid=%s step=convai_ok reply=%r audio=%d bytes",
                              uid, reply_text[:80], len(audio_bytes))
                 except Exception as e:
