@@ -77,7 +77,6 @@ FONT_REGULAR_EN = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 PUBLISH_ORDER = [
     ("CAD",  "دلار کانادا",  "Canada"),
     ("USD",  "دلار آمریکا", "USA"),
-    ("EUR",  "یورو اروپا",   "Europe"),
     ("USDT", "تتر (USDT)",   "USDT"),
 ]
 
