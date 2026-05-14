@@ -784,14 +784,14 @@ def rates_changed(new: dict, stored: dict) -> bool:
 
 # ─── Posting ──────────────────────────────────────────────────────────────────
 
-def post_to_channel(image_path: Path, caption: str):
+def post_to_channel(image_path: Path):
     log.info(f"📤 Posting to {TARGET_CHANNEL} via Bot API...")
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
     try:
         with open(image_path, "rb") as f:
             resp = _requests.post(
                 url,
-                data={"chat_id": TARGET_CHANNEL, "caption": caption},
+                data={"chat_id": TARGET_CHANNEL},
                 files={"photo": f},
                 timeout=30,
             )
@@ -844,12 +844,7 @@ async def scan_and_post(client: TelegramClient, force: bool = False,
         # Date header — only on first daily post
         if post_date_header:
             header_path = generate_date_header(toronto_now)
-            header_caption = (
-                f"📅 {persian_date(toronto_now)} | "
-                f"{toronto_now.strftime('%A, %d %B %Y')}\n"
-                "🌿 نرخ روز صرافی سیروس\n@cyrusGlobalExchange"
-            )
-            post_to_channel(header_path, header_caption)
+            post_to_channel(header_path)
             await asyncio.sleep(2)
 
         # 4 individual currency posters in fixed order
@@ -861,8 +856,7 @@ async def scan_and_post(client: TelegramClient, force: bool = False,
             poster_path = generate_single_poster(
                 cur_code, cur_name_fa, buy, sell, toronto_now
             )
-            caption = build_caption(cur_code, cur_name_fa, buy, sell, toronto_now)
-            post_to_channel(poster_path, caption)
+            post_to_channel(poster_path)
             await asyncio.sleep(2)   # small gap between posts
 
         save_rates(adjusted, toronto_now)
