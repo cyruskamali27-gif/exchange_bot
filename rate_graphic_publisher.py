@@ -373,12 +373,20 @@ def _fallback_from_cache(collected: dict) -> dict:
     except Exception:
         return collected
 
-    MAX_AGE_S = 7200
-    now_ts    = datetime.now(timezone.utc).timestamp()
+    # Tight window for a fully-missing currency; wider window when
+    # only one direction is missing (e.g. sell found, buy absent).
+    MAX_AGE_FULL_S = 7200        # 2 h — whole currency missing
+    MAX_AGE_BUY_S  = 7 * 86400  # 7 d — buy-only gap
+
+    now_ts = datetime.now(timezone.utc).timestamp()
 
     for cur_code in ("USD", "CAD", "EUR", "USDT"):
-        if cur_code in collected and collected[cur_code]:
-            continue
+        cur_data = collected.get(cur_code, {})
+        has_sell = cur_data.get("sell") is not None
+        has_buy  = cur_data.get("buy")  is not None
+
+        if has_sell and has_buy:
+            continue  # already complete
 
         entry = cache.get(cur_code, {})
         upd   = entry.get("updated_at", 0)
@@ -387,19 +395,31 @@ def _fallback_from_cache(collected: dict) -> dict:
         except Exception:
             upd_ts = 0
 
-        if now_ts - upd_ts > MAX_AGE_S:
+        age_s   = now_ts - upd_ts
+        max_age = MAX_AGE_BUY_S if has_sell else MAX_AGE_FULL_S
+
+        if age_s > max_age:
+            log.info(f"  [{cur_code}] cache too old ({age_s/3600:.1f}h) — skipping")
             continue
 
         our_buy  = entry.get("our_buy")  or entry.get("buy")
         our_sell = entry.get("our_sell") or entry.get("price")
 
-        if our_buy or our_sell:
-            collected.setdefault(cur_code, {})
-            if our_buy  and "buy"  not in collected[cur_code]:
-                collected[cur_code]["buy"]  = int(our_buy)
-            if our_sell and "sell" not in collected[cur_code]:
-                collected[cur_code]["sell"] = int(our_sell)
-            log.info(f"  [{cur_code}] cache fallback: buy={our_buy} sell={our_sell}")
+        collected.setdefault(cur_code, {})
+
+        if our_buy and not has_buy:
+            buy_val = int(our_buy)
+            # Sanity: buy must be below sell to avoid inverted prices
+            live_sell = collected[cur_code].get("sell")
+            if live_sell and buy_val >= live_sell:
+                buy_val = live_sell - 2000
+                log.warning(f"  [{cur_code}] cache buy capped to {buy_val:,} (was >= live sell)")
+            collected[cur_code]["buy"] = buy_val
+            log.info(f"  [{cur_code}] cache fallback buy={buy_val:,} (age={age_s/3600:.1f}h)")
+
+        if our_sell and not has_sell:
+            collected[cur_code]["sell"] = int(our_sell)
+            log.info(f"  [{cur_code}] cache fallback sell={our_sell} (age={age_s/3600:.1f}h)")
 
     return collected
 
