@@ -58,12 +58,6 @@ BUY_ADJ  = int(os.environ.get("PUBLISHER_BUY_ADJ", "500"))
 # SELL_ADJ is ZERO — Cyrus sell = Bahmani sell exactly
 SELL_ADJ = 0
 
-# Contact info drawn on every poster footer
-CONTACT_PHONE     = "2269627729"
-CONTACT_TELEGRAM  = "@cyrusGlobalExchange"
-CONTACT_INSTAGRAM = "@cyrusGlobalExchange"
-CONTACT_LOCATION  = "Guelph, Ontario"
-
 FONT_BOLD       = "/usr/share/fonts/truetype/noto/NotoSansArabic-Bold.ttf"
 FONT_REGULAR    = "/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf"
 FONT_BOLD_EN    = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
@@ -77,56 +71,47 @@ TEMPLATES = {
     "USACAN": ASSETS_DIR / "updated_cyrus_exchange_usacan_poster.png",
 }
 
-# ─── Price row coordinates ─────────────────────────────────────────────────────
-# Pixel analysis shows:
-#   - Left price column (Persian side): x ≈ 248–455
-#   - Right price column (English side): x ≈ 490–700
-# Both columns hold the same price. Old code only cleared x=258-460, leaving
-# the right column (x≈490-700) uncleaned — that is why old prices remained.
-#
-# Fix: clear X_CLEAR_START→X_CLEAR_END (covers BOTH columns), then write
-# the label on the left and the new price on the right.
-#
-# Each tuple: (y_top, y_bot, price_key, label_fa, label_en)
-
-POSTER_ROWS: dict[str, list[tuple]] = {
+# ─── Price zones — ONLY the number area to clear and rewrite ─────────────────
+# Each tuple: (y_top, y_bot, x_left, x_right, price_key)
+# Determined by pixel-level OCR analysis of each template.
+# These are the EXACT bounding boxes of the price numbers — nothing else is touched.
+PRICE_ZONES: dict[str, list[tuple]] = {
     "CAD": [
-        (238, 284, "sell", "فروش نقدی",       "Cash Sell"),
-        (303, 348, "sell", "فروش ای‌ترنسفر", "E-Transfer"),
-        (370, 413, "buy",  "خرید",            "Buy"),
+        (314, 412, 462, 754, "sell"),   # Cash Sell
+        (434, 497, 462, 710, "sell"),   # Left Cheque (same sell price)
+        (525, 596, 462, 710, "sell"),   # E-Transfer (same sell price)
+        (644, 714, 462, 710, "buy"),    # Cash Buy
+        (754, 822, 462, 710, "buy"),    # Cash Buy Direct Transfer
     ],
     "USD": [
-        (305, 350, "sell", "فروش نقدی", "Cash Sell"),
-        (383, 428, "buy",  "خرید",      "Buy"),
+        (314, 373, 462, 706, "sell"),   # Cash Sell
+        (424, 481, 462, 706, "sell"),   # Inside USA
+        (533, 592, 462, 706, "sell"),   # USA Personal Transfer
+        (632, 692, 462, 706, "buy"),    # Cash Buy
+        (738, 796, 462, 706, "buy"),    # Cash Buy Direct Transfer
     ],
     "EUR": [
-        (336, 380, "sell", "فروش", "Sell"),
-        (388, 428, "buy",  "خرید", "Buy"),
+        (352, 558, 638, 830, "sell"),   # Sell (full right zone of row)
+        (580, 784, 638, 830, "buy"),    # Buy
     ],
     "USDT": [
-        (276, 316, "sell", "فروش تتر", "USDT Sell"),
-        (356, 396, "buy",  "خرید تتر", "USDT Buy"),
+        (345, 555, 638, 830, "sell"),   # Sell
+        (580, 785, 638, 830, "buy"),    # Buy
     ],
     "USACAN": [
-        (336, 380, "sell", "فروش", "Sell"),
-        (388, 428, "buy",  "خرید", "Buy"),
+        (360, 550, 638, 845, "sell"),   # Sell
+        (582, 772, 638, 845, "buy"),    # Buy
     ],
 }
 
-# X range cleared for every price row — covers BOTH the left and right price columns
-X_CLEAR_START = 50
-X_CLEAR_END   = 755
-
-# How many pixels at the TOP to clear (strips with old phone/handles baked in)
-# Confirmed by pixel/OCR analysis:
-#   USD, EUR, USDT: ~65px top strip shows old "@CyrusExchange / 416-319-0000"
-#   CAD: no confirmed top-strip old info, use 0 to avoid clipping title
-TOP_STRIP_H: dict[str, int] = {
-    "CAD":    0,
-    "USD":    65,
-    "EUR":    65,
-    "USDT":   52,
-    "USACAN": 65,
+# ─── Date text zones — area inside the date box to clear and rewrite ─────────
+# (y_top, y_bot, x_left, x_right)  — calendar icon is preserved to the left
+DATE_ZONES: dict[str, tuple] = {
+    "CAD":    (183, 259, 402, 668),
+    "USD":    (183, 250, 402, 665),
+    "EUR":    (207, 290, 402, 680),
+    "USDT":   (203, 287, 402, 680),
+    "USACAN": (207, 308, 420, 800),
 }
 
 PUBLISH_ORDER = [
@@ -153,19 +138,6 @@ def fa(text: str) -> str:
     return get_display(arabic_reshaper.reshape(text))
 
 
-def fa_num(n: int) -> str:
-    return f"{n:,}"
-
-
-def persian_date(dt: datetime) -> str:
-    if HAS_JDATE:
-        jd = jdatetime.datetime.fromgregorian(datetime=dt)
-        months = ["فروردین","اردیبهشت","خرداد","تیر","مرداد","شهریور",
-                  "مهر","آبان","آذر","دی","بهمن","اسفند"]
-        return f"{jd.day} {months[jd.month-1]} {jd.year}"
-    return dt.strftime("%Y-%m-%d")
-
-
 def load_font(path: str, size: int) -> ImageFont.FreeTypeFont:
     try:
         return ImageFont.truetype(path, size)
@@ -174,21 +146,39 @@ def load_font(path: str, size: int) -> ImageFont.FreeTypeFont:
         return ImageFont.load_default()
 
 
+def persian_date_full(dt: datetime) -> str:
+    """Return full Persian date string: e.g. 'جمعه 25 اردیبهشت 1404'"""
+    day_names = ["دوشنبه", "سه‌شنبه", "چهارشنبه", "پنج‌شنبه", "جمعه", "شنبه", "یک‌شنبه"]
+    months    = ["فروردین","اردیبهشت","خرداد","تیر","مرداد","شهریور",
+                 "مهر","آبان","آذر","دی","بهمن","اسفند"]
+    if HAS_JDATE:
+        jd      = jdatetime.datetime.fromgregorian(datetime=dt)
+        day_fa  = day_names[dt.weekday()]   # Mon=0…Sun=6
+        return f"{day_fa} {jd.day} {months[jd.month-1]} {jd.year}"
+    return dt.strftime("%A %d %B %Y")
+
+
 # ─── Background colour sampling ───────────────────────────────────────────────
 
-def sample_bg_left_edge(px, y_center: int, H: int) -> tuple:
+def sample_zone_bg(px_rgb, y1: int, y2: int, x1: int, x2: int) -> tuple:
     """
-    Sample background from x=10-35 (far-left edge, always dark/background).
-    Returns (R, G, B).
+    Return the background colour of a zone by averaging its darkest pixels.
+    Works even when text (bright) pixels dominate the zone center.
     """
     samples = []
-    yc = max(0, min(y_center, H - 1))
-    for sx in range(10, 36):
-        samples.append(px[sx, yc])
-    r = sum(s[0] for s in samples) // len(samples)
-    g = sum(s[1] for s in samples) // len(samples)
-    b = sum(s[2] for s in samples) // len(samples)
-    return (r, g, b)
+    for sy in range(y1, y2, 4):
+        for sx in range(x1, x2, 15):
+            r, g, b = px_rgb[sx, sy]
+            samples.append((r, g, b, (r + g + b) / 3))
+    if not samples:
+        return (0, 0, 0)
+    samples.sort(key=lambda s: s[3])
+    dark = samples[: max(1, len(samples) // 4)]
+    return (
+        sum(s[0] for s in dark) // len(dark),
+        sum(s[1] for s in dark) // len(dark),
+        sum(s[2] for s in dark) // len(dark),
+    )
 
 
 # ─── Poster generator ─────────────────────────────────────────────────────────
@@ -203,125 +193,75 @@ def generate_single_poster(currency: str, cur_name_fa: str,
         log.error(f"[{currency}] Missing template: {template_path}")
         return None
 
-    log.info(f"[{currency}] === Generating poster ===")
-    log.info(f"[{currency}] Template: {template_path}")
-    log.info(f"[{currency}] Cyrus sell={sell}  Cyrus buy={buy}")
+    log.info(f"[{currency}] Generating poster  sell={sell}  buy={buy}")
 
     # Always open the ORIGINAL template — never a previously generated file
     img     = Image.open(template_path).convert("RGBA")
-    img_rgb = img.convert("RGB")
     draw    = ImageDraw.Draw(img)
     W, H    = img.size
-    px      = img_rgb.load()
+    px_rgb  = img.convert("RGB").load()
 
     prices = {"sell": sell, "buy": buy}
 
-    # ── 1. Clear TOP STRIP with old contact info ───────────────────────────
-    top_h = TOP_STRIP_H.get(currency, 0)
-    if top_h > 0:
-        bg = sample_bg_left_edge(px, top_h // 2, H)
-        draw.rectangle([0, 0, W, top_h], fill=(*bg, 255))
-        log.info(f"[{currency}] Cleared top strip y=0-{top_h}  bg={bg}")
-
-    # ── 2. Clear each price row and write label + new price ────────────────
-    rows = POSTER_ROWS.get(currency, [])
-
-    for y1, y2, price_key, label_fa, label_en in rows:
+    # ── 1. Write prices into existing price boxes only ─────────────────────
+    for y1, y2, x1, x2, price_key in PRICE_ZONES.get(currency, []):
         value     = prices.get(price_key)
-        value_str = fa_num(value) if value is not None else "---"
+        value_str = f"{value:,}" if value is not None else "---"
 
-        row_h = y2 - y1
-        bg    = sample_bg_left_edge(px, (y1 + y2) // 2, H)
+        bg = sample_zone_bg(px_rgb, y1, y2, x1, x2)
+        draw.rectangle([x1, y1, x2, y2], fill=(*bg, 255))
 
-        # Clear the full price zone (covers both left AND right old price columns)
-        draw.rectangle([X_CLEAR_START, y1, X_CLEAR_END, y2], fill=(*bg, 255))
-        log.info(f"  [{currency}] Cleared row {price_key} y={y1}-{y2} x={X_CLEAR_START}-{X_CLEAR_END}  bg={bg}")
+        zone_w    = x2 - x1
+        zone_h    = y2 - y1
+        font_size = min(80, max(28, int(zone_h * 0.52)))
+        font      = load_font(FONT_BOLD_EN, font_size)
 
-        # ── Label fonts (sized to ~40% of row height) ──────────────────────
-        lbl_size = max(11, int(row_h * 0.40))
-        font_lbl_fa = load_font(FONT_BOLD,       lbl_size)
-        font_lbl_en = load_font(FONT_REGULAR_EN, max(10, lbl_size - 2))
+        bb = draw.textbbox((0, 0), value_str, font=font)
+        tw = bb[2] - bb[0]
+        th = bb[3] - bb[1]
+        tx = x1 + (zone_w - tw) // 2
+        ty = y1 + (zone_h - th) // 2
 
-        # ── Price font (sized to ~65% of row height) ───────────────────────
-        price_size = max(16, int(row_h * 0.65))
-        font_price = load_font(FONT_BOLD_EN, price_size)
+        draw.text((tx + 1, ty + 1), value_str, font=font, fill=(0, 0, 0, 150))
+        draw.text((tx,     ty),     value_str, font=font, fill=(255, 255, 255, 255))
+        log.info(f"  [{currency}] {price_key}='{value_str}' zone y={y1}-{y2} x={x1}-{x2} "
+                 f"font={font_size}px  bg={bg}")
 
-        # Layout: label occupies x=X_CLEAR_START..MIDPOINT-10
-        #         price occupies x=MIDPOINT+10..X_CLEAR_END-10
-        midpoint   = (X_CLEAR_START + X_CLEAR_END) // 2
+    # ── 2. Update date inside existing date box (calendar icon preserved) ──
+    if currency in DATE_ZONES:
+        yt, yb, xl, xr = DATE_ZONES[currency]
+        bg = sample_zone_bg(px_rgb, yt, yb, xl, xr)
+        draw.rectangle([xl, yt, xr, yb], fill=(*bg, 255))
 
-        # --- Draw Persian label (right-aligned in label zone) ---------------
-        fa_label  = fa(label_fa)
-        lb = draw.textbbox((0, 0), fa_label, font=font_lbl_fa)
-        lw, lh = lb[2] - lb[0], lb[3] - lb[1]
-        lx = midpoint - 15 - lw          # right-align before midpoint
-        ly = y1 + (row_h - lh) // 2
-        if lx >= X_CLEAR_START:
-            draw.text((lx, ly), fa_label, font=font_lbl_fa,
-                      fill=(255, 220, 150, 255))
+        zone_h = yb - yt
+        fa_size = max(14, int(zone_h * 0.30))
+        en_size = max(11, int(zone_h * 0.22))
+        font_fa = load_font(FONT_BOLD,       fa_size)
+        font_en = load_font(FONT_REGULAR_EN, en_size)
 
-        # --- Draw English label below Persian (right-aligned) ---------------
-        eb = draw.textbbox((0, 0), label_en, font=font_lbl_en)
-        ew, eh = eb[2] - eb[0], eb[3] - eb[1]
-        ex = midpoint - 15 - ew
-        ey = ly + lh + 1
-        if ex >= X_CLEAR_START and ey + eh <= y2:
-            draw.text((ex, ey), label_en, font=font_lbl_en,
-                      fill=(200, 175, 110, 220))
+        date_fa = fa(persian_date_full(toronto_now))
+        date_en = toronto_now.strftime("%d %B %Y")
 
-        # --- Draw price number (centered in right zone) ---------------------
-        pb = draw.textbbox((0, 0), value_str, font=font_price)
-        pw, ph = pb[2] - pb[0], pb[3] - pb[1]
-        px_pos = midpoint + 10 + (X_CLEAR_END - midpoint - 10 - pw) // 2
-        py_pos = y1 + (row_h - ph) // 2
+        total_h = fa_size + en_size + 6
+        start_y = yt + (zone_h - total_h) // 2
 
-        draw.text((px_pos + 1, py_pos + 1), value_str, font=font_price,
-                  fill=(0, 0, 0, 130))
-        draw.text((px_pos,     py_pos),     value_str, font=font_price,
-                  fill=(255, 255, 255, 255))
-        log.info(f"  [{currency}] Wrote '{value_str}' ({price_key}) at ({px_pos},{py_pos}) size={price_size}px")
+        # Persian date — right-aligned
+        bb  = draw.textbbox((0, 0), date_fa, font=font_fa)
+        fw  = bb[2] - bb[0]
+        fty = start_y
+        draw.text((xr - 8 - fw, fty), date_fa, font=font_fa, fill=(240, 220, 160, 255))
 
-    # ── 3. Clear old footer and draw fresh footer ──────────────────────────
-    FOOTER_H  = 65
-    footer_y1 = H - FOOTER_H
+        # Gregorian date — left-aligned
+        draw.text((xl + 8, start_y + fa_size + 6), date_en,
+                  font=font_en, fill=(220, 200, 140, 255))
 
-    footer_bg = sample_bg_left_edge(px, H - 30, H)
-    # Use a slightly darker/consistent teal footer background
-    # (all templates have teal footer ~ (7,19,19); sampled value confirms)
-    draw.rectangle([0, footer_y1, W, H], fill=(*footer_bg, 255))
-    log.info(f"[{currency}] Cleared footer y={footer_y1}-{H}  bg={footer_bg}")
+        log.info(f"[{currency}] Date: '{date_fa}'  '{date_en}'  zone y={yt}-{yb} x={xl}-{xr}")
 
-    # Footer lines (centered, gold/cream colour)
-    footer_color = (245, 226, 178, 255)   # warm cream/gold
-    shadow_color = (0, 0, 0, 120)
-
-    footer_lines = [
-        ("Cyrus Global Exchange",                              FONT_BOLD_EN,    16),
-        (f"Phone: {CONTACT_PHONE}  |  {CONTACT_LOCATION}",   FONT_REGULAR_EN, 12),
-        (f"Telegram: {CONTACT_TELEGRAM}  |  Instagram: {CONTACT_INSTAGRAM}",
-                                                               FONT_REGULAR_EN, 11),
-    ]
-
-    total_h = sum(sz + 4 for _, _, sz in footer_lines)
-    cur_y   = footer_y1 + (FOOTER_H - total_h) // 2
-
-    for text, fpath, fsize in footer_lines:
-        font = load_font(fpath, fsize)
-        bb   = draw.textbbox((0, 0), text, font=font)
-        tw   = bb[2] - bb[0]
-        tx   = (W - tw) // 2
-        draw.text((tx + 1, cur_y + 1), text, font=font, fill=shadow_color)
-        draw.text((tx,     cur_y),     text, font=font, fill=footer_color)
-        cur_y += fsize + 4
-
-    log.info(f"[{currency}] Footer: Phone={CONTACT_PHONE} | Tel={CONTACT_TELEGRAM} "
-             f"| IG={CONTACT_INSTAGRAM} | {CONTACT_LOCATION}")
-
-    # ── 4. Save ────────────────────────────────────────────────────────────
+    # ── 3. Save ────────────────────────────────────────────────────────────
     ts_str   = toronto_now.strftime("%Y-%m-%d-%H%M")
     out_path = GENERATED_DIR / f"{ts_str}-{currency.lower()}.png"
     img.convert("RGB").save(str(out_path), "PNG")
-    log.info(f"[{currency}] Saved: {out_path}")
+    log.info(f"[{currency}] Saved → {out_path}")
     return out_path
 
 
