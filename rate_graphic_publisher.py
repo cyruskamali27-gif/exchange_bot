@@ -104,14 +104,17 @@ PRICE_ZONES: dict[str, list[tuple]] = {
     ],
 }
 
-# ─── Date text zones — area inside the date box to clear and rewrite ─────────
-# (y_top, y_bot, x_left, x_right)  — calendar icon is preserved to the left
-DATE_ZONES: dict[str, tuple] = {
-    "CAD":    (183, 265, 385, 680),
-    "USD":    (183, 252, 385, 682),
-    "EUR":    (207, 293, 377, 700),
-    "USDT":   (203, 287, 380, 700),
-    "USACAN": (207, 312, 380, 820),
+# ─── Date rendering config — per-poster, derived from OCR of original templates ─
+# zone:    (y_top, y_bot, x_left, x_right) — text-only clear area; calendar icon sits left of x_left
+# fa_y:    absolute y_top pixel for the Persian/Shamsi date line
+# en_y:    absolute y_top pixel for the Gregorian date line
+# fa_size: Persian font size (px), en_size: Gregorian font size (px)
+DATE_CONFIG: dict[str, dict] = {
+    "CAD":    {"zone": (184, 252, 387, 700), "fa_y": 188, "en_y": 227, "fa_size": 26, "en_size": 18},
+    "USD":    {"zone": (185, 252, 355, 654), "fa_y": 189, "en_y": 227, "fa_size": 26, "en_size": 18},
+    "EUR":    {"zone": (216, 291, 379, 715), "fa_y": 220, "en_y": 262, "fa_size": 28, "en_size": 20},
+    "USDT":   {"zone": (207, 284, 383, 730), "fa_y": 211, "en_y": 255, "fa_size": 30, "en_size": 21},
+    "USACAN": {"zone": (229, 310, 383, 738), "fa_y": 233, "en_y": 279, "fa_size": 30, "en_size": 21},
 }
 
 PUBLISH_ORDER = [
@@ -147,14 +150,16 @@ def load_font(path: str, size: int) -> ImageFont.FreeTypeFont:
 
 
 def persian_date_full(dt: datetime) -> str:
-    """Return full Persian date string: e.g. 'جمعه 25 اردیبهشت 1404'"""
+    """Return full Persian date string: e.g. 'پنج‌شنبه ۲۴ اردیبهشت ۱۴۰۵'"""
     day_names = ["دوشنبه", "سه‌شنبه", "چهارشنبه", "پنج‌شنبه", "جمعه", "شنبه", "یک‌شنبه"]
     months    = ["فروردین","اردیبهشت","خرداد","تیر","مرداد","شهریور",
                  "مهر","آبان","آذر","دی","بهمن","اسفند"]
+    _to_fa = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
     if HAS_JDATE:
-        jd      = jdatetime.datetime.fromgregorian(datetime=dt)
-        day_fa  = day_names[dt.weekday()]   # Mon=0…Sun=6
-        return f"{day_fa} {jd.day} {months[jd.month-1]} {jd.year}"
+        jd     = jdatetime.datetime.fromgregorian(datetime=dt)
+        day_fa = day_names[dt.weekday()]   # Mon=0…Sun=6
+        return (f"{day_fa} {str(jd.day).translate(_to_fa)} "
+                f"{months[jd.month-1]} {str(jd.year).translate(_to_fa)}")
     return dt.strftime("%A %d %B %Y")
 
 
@@ -237,34 +242,35 @@ def generate_single_poster(currency: str, cur_name_fa: str,
                  f"font={font_size}px  bg={bg}")
 
     # ── 2. Update date inside existing date box (calendar icon preserved) ──
-    if currency in DATE_ZONES:
-        yt, yb, xl, xr = DATE_ZONES[currency]
+    if currency in DATE_CONFIG:
+        cfg         = DATE_CONFIG[currency]
+        yt, yb, xl, xr = cfg["zone"]
+
         bg = sample_zone_bg(px_rgb, yt, yb, xl, xr)
         draw.rectangle([xl, yt, xr, yb], fill=(*bg, 255))
 
-        zone_h = yb - yt
-        fa_size = max(14, int(zone_h * 0.30))
-        en_size = max(11, int(zone_h * 0.22))
-        font_fa = load_font(FONT_BOLD,       fa_size)
-        font_en = load_font(FONT_REGULAR_EN, en_size)
+        zone_w  = xr - xl
+        font_fa = load_font(FONT_BOLD,       cfg["fa_size"])
+        font_en = load_font(FONT_REGULAR_EN, cfg["en_size"])
 
         date_fa = fa(persian_date_full(toronto_now))
         date_en = toronto_now.strftime("%d %B %Y")
 
-        total_h = fa_size + en_size + 6
-        start_y = yt + (zone_h - total_h) // 2
-
-        # Persian date — right-aligned
+        # Persian line — centre-aligned in text zone at exact template y
         bb  = draw.textbbox((0, 0), date_fa, font=font_fa)
-        fw  = bb[2] - bb[0]
-        fty = start_y
-        draw.text((xr - 8 - fw, fty), date_fa, font=font_fa, fill=(240, 220, 160, 255))
+        tw  = bb[2] - bb[0]
+        tx  = xl + (zone_w - tw) // 2
+        draw.text((tx, cfg["fa_y"]), date_fa, font=font_fa, fill=(240, 220, 160, 255))
 
-        # Gregorian date — left-aligned
-        draw.text((xl + 8, start_y + fa_size + 6), date_en,
-                  font=font_en, fill=(220, 200, 140, 255))
+        # Gregorian line — centre-aligned in text zone at exact template y
+        bb  = draw.textbbox((0, 0), date_en, font=font_en)
+        tw  = bb[2] - bb[0]
+        tx  = xl + (zone_w - tw) // 2
+        draw.text((tx, cfg["en_y"]), date_en, font=font_en, fill=(220, 200, 140, 255))
 
-        log.info(f"[{currency}] Date: '{date_fa}'  '{date_en}'  zone y={yt}-{yb} x={xl}-{xr}")
+        log.info(f"[{currency}] Date zone y={yt}-{yb} x={xl}-{xr} | "
+                 f"Persian='{date_fa}' @y={cfg['fa_y']} | "
+                 f"Gregorian='{date_en}' @y={cfg['en_y']}")
 
     # ── 3. Save ────────────────────────────────────────────────────────────
     ts_str   = toronto_now.strftime("%Y-%m-%d-%H%M")
