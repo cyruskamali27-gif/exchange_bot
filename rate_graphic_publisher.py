@@ -152,14 +152,13 @@ def load_font(path: str, size: int) -> ImageFont.FreeTypeFont:
 def persian_date_full(dt: datetime) -> str:
     """Return full Persian date string: e.g. 'پنج‌شنبه ۲۴ اردیبهشت ۱۴۰۵'"""
     day_names = ["دوشنبه", "سه‌شنبه", "چهارشنبه", "پنج‌شنبه", "جمعه", "شنبه", "یک‌شنبه"]
-    months    = ["فروردین","اردیبهشت","خرداد","تیر","مرداد","شهریور",
-                 "مهر","آبان","آذر","دی","بهمن","اسفند"]
     _to_fa = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
     if HAS_JDATE:
-        jd     = jdatetime.datetime.fromgregorian(datetime=dt)
-        day_fa = day_names[dt.weekday()]   # Mon=0…Sun=6
+        jd       = jdatetime.datetime.fromgregorian(datetime=dt)
+        day_fa   = day_names[dt.weekday()]          # Mon=0…Sun=6
+        month_fa = jd.j_months_fa[jd.month - 1]    # Persian month name from jdatetime
         return (f"{day_fa} {str(jd.day).translate(_to_fa)} "
-                f"{months[jd.month-1]} {str(jd.year).translate(_to_fa)}")
+                f"{month_fa} {str(jd.year).translate(_to_fa)}")
     return dt.strftime("%A %d %B %Y")
 
 
@@ -249,24 +248,23 @@ def generate_single_poster(currency: str, cur_name_fa: str,
         bg = sample_zone_bg(px_rgb, yt, yb, xl, xr)
         draw.rectangle([xl, yt, xr, yb], fill=(*bg, 255))
 
-        zone_w  = xr - xl
         font_fa = load_font(FONT_BOLD,       cfg["fa_size"])
         font_en = load_font(FONT_REGULAR_EN, cfg["en_size"])
 
         date_fa = fa(persian_date_full(toronto_now))
         date_en = toronto_now.strftime("%d %B %Y")
 
-        # Persian line — centre-aligned in text zone at exact template y
-        bb  = draw.textbbox((0, 0), date_fa, font=font_fa)
-        tw  = bb[2] - bb[0]
-        tx  = xl + (zone_w - tw) // 2
-        draw.text((tx, cfg["fa_y"]), date_fa, font=font_fa, fill=(240, 220, 160, 255))
+        x_c = (xl + xr) // 2  # horizontal centre of text zone
 
-        # Gregorian line — centre-aligned in text zone at exact template y
-        bb  = draw.textbbox((0, 0), date_en, font=font_en)
-        tw  = bb[2] - bb[0]
-        tx  = xl + (zone_w - tw) // 2
-        draw.text((tx, cfg["en_y"]), date_en, font=font_en, fill=(220, 200, 140, 255))
+        # Persian line — anchor="mm" centres text at (x_c, line_centre_y)
+        fa_cy = cfg["fa_y"] + cfg["fa_size"] // 2
+        draw.text((x_c, fa_cy), date_fa, font=font_fa,
+                  fill=(240, 220, 160, 255), anchor="mm")
+
+        # Gregorian line — same approach
+        en_cy = cfg["en_y"] + cfg["en_size"] // 2
+        draw.text((x_c, en_cy), date_en, font=font_en,
+                  fill=(220, 200, 140, 255), anchor="mm")
 
         log.info(f"[{currency}] Date zone y={yt}-{yb} x={xl}-{xr} | "
                  f"Persian='{date_fa}' @y={cfg['fa_y']} | "
