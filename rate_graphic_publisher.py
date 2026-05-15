@@ -237,8 +237,12 @@ def generate_single_poster(currency: str, cur_name_fa: str,
     draw   = ImageDraw.Draw(img)
     px_rgb = img.convert("RGB").load()
 
-    sell_str = f"{sell:,}" if sell is not None else "---"
-    buy_str  = f"{buy:,}"  if buy  is not None else "---"
+    if currency in ("USACAN", "EUR"):
+        sell_str = f"{sell:.2f}" if sell is not None else "---"
+        buy_str  = f"{buy:.2f}"  if buy  is not None else "---"
+    else:
+        sell_str = f"{sell:,}" if sell is not None else "---"
+        buy_str  = f"{buy:,}"  if buy  is not None else "---"
 
     # ── 1. Write prices strictly inside defined boxes ──────────────────────
     for box in coords.get("sell_boxes", []):
@@ -459,6 +463,47 @@ def _fallback_from_cache(collected: dict) -> dict:
     return collected
 
 
+def _derive_eur_cad_rate(usd_prices: dict, cad_prices: dict) -> dict | None:
+    """
+    Derive EUR/CAD rate (how many CAD per 1 EUR) from USD/CAD Toman prices
+    and a live EUR/USD exchange rate.
+
+    EUR_toman  = USD_toman / (EUR per 1 USD)
+    EUR/CAD    = EUR_toman / CAD_toman
+    """
+    usd_sell = usd_prices.get("sell")
+    usd_buy  = usd_prices.get("buy")
+    cad_sell = cad_prices.get("sell")
+    cad_buy  = cad_prices.get("buy")
+    if not usd_sell or not cad_sell:
+        return None
+    try:
+        resp = _requests.get(
+            "https://open.er-api.com/v6/latest/USD",
+            timeout=8,
+        )
+        data = resp.json()
+        eur_per_usd = data.get("rates", {}).get("EUR")   # e.g. 0.856 (EUR per 1 USD)
+        if not eur_per_usd or eur_per_usd <= 0:
+            return None
+        eur_sell_toman = usd_sell / eur_per_usd
+        eur_buy_toman  = (usd_buy / eur_per_usd) if usd_buy else None
+
+        eur_cad_sell = round(eur_sell_toman / cad_sell, 2)
+        eur_cad_buy  = (round(eur_buy_toman  / cad_buy, 2)
+                        if eur_buy_toman and cad_buy else None)
+        log.info(f"  [EUR] EUR/USD={eur_per_usd:.4f}  "
+                 f"EUR_toman≈{eur_sell_toman:,.0f}  "
+                 f"EUR/CAD sell={eur_cad_sell} buy={eur_cad_buy}")
+        result: dict = {"sell": eur_cad_sell}
+        if eur_cad_buy is not None:
+            result["buy"] = eur_cad_buy
+        return result
+    except Exception as exc:
+        log.warning(f"  [EUR] live rate fetch failed: {exc}")
+        return None
+
+
 def adjust_rates(source: dict) -> dict:
     """
     Apply Cyrus pricing rules:
@@ -576,6 +621,23 @@ async def scan_and_post(client: TelegramClient, force: bool = False):
 
     adjusted = adjust_rates(source_rates) if source_rates else {}
     adjusted = _fallback_from_cache(adjusted)
+
+    # USACAN: USD/CAD rate in CAD (e.g. 1.41), derived from Toman prices
+    usd_p = adjusted.get("USD", {})
+    cad_p = adjusted.get("CAD", {})
+    if usd_p.get("sell") and cad_p.get("sell") and "USACAN" not in adjusted:
+        usacan_sell = round(usd_p["sell"] / cad_p["sell"], 2)
+        usacan_buy  = (round(usd_p["buy"] / cad_p["buy"], 2)
+                       if usd_p.get("buy") and cad_p.get("buy") else None)
+        adjusted["USACAN"] = {"sell": usacan_sell, "buy": usacan_buy}
+        log.info(f"  [USACAN] derived sell={usacan_sell} buy={usacan_buy} CAD/USD")
+
+    # EUR: derive EUR/CAD rate from USD/CAD Toman prices + live EUR/USD rate
+    if not adjusted.get("EUR", {}).get("sell"):
+        eur_derived = _derive_eur_cad_rate(adjusted.get("USD", {}),
+                                           adjusted.get("CAD", {}))
+        if eur_derived:
+            adjusted.setdefault("EUR", {}).update(eur_derived)
 
     if source_rates:
         log_pricing_formula_analysis(source_rates)
