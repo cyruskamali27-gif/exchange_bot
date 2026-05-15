@@ -91,27 +91,27 @@ PRICE_ZONES: dict[str, list[tuple]] = {
         (738, 796, 462, 706, "buy"),    # Cash Buy Direct Transfer
     ],
     "EUR": [
-        (352, 558, 638, 830, "sell"),   # Sell (full right zone of row)
-        (580, 784, 638, 830, "buy"),    # Buy
+        (352, 558, 615, 830, "sell"),   # Sell
+        (580, 784, 615, 830, "buy"),    # Buy
     ],
     "USDT": [
-        (345, 555, 638, 830, "sell"),   # Sell
-        (580, 785, 638, 830, "buy"),    # Buy
+        (345, 555, 615, 830, "sell"),   # Sell
+        (580, 785, 615, 830, "buy"),    # Buy
     ],
     "USACAN": [
-        (360, 550, 638, 845, "sell"),   # Sell
-        (582, 772, 638, 845, "buy"),    # Buy
+        (360, 550, 615, 845, "sell"),   # Sell
+        (582, 772, 615, 845, "buy"),    # Buy
     ],
 }
 
 # ─── Date text zones — area inside the date box to clear and rewrite ─────────
 # (y_top, y_bot, x_left, x_right)  — calendar icon is preserved to the left
 DATE_ZONES: dict[str, tuple] = {
-    "CAD":    (183, 259, 402, 668),
-    "USD":    (183, 250, 402, 665),
-    "EUR":    (207, 290, 402, 680),
-    "USDT":   (203, 287, 402, 680),
-    "USACAN": (207, 308, 420, 800),
+    "CAD":    (183, 265, 385, 680),
+    "USD":    (183, 252, 385, 682),
+    "EUR":    (207, 293, 377, 700),
+    "USDT":   (203, 287, 380, 700),
+    "USACAN": (207, 312, 380, 820),
 }
 
 PUBLISH_ORDER = [
@@ -219,6 +219,15 @@ def generate_single_poster(currency: str, cur_name_fa: str,
         bb = draw.textbbox((0, 0), value_str, font=font)
         tw = bb[2] - bb[0]
         th = bb[3] - bb[1]
+
+        # Auto-shrink until text fits inside zone width
+        while tw > zone_w - 8 and font_size > 14:
+            font_size -= 2
+            font = load_font(FONT_BOLD_EN, font_size)
+            bb = draw.textbbox((0, 0), value_str, font=font)
+            tw = bb[2] - bb[0]
+            th = bb[3] - bb[1]
+
         tx = x1 + (zone_w - tw) // 2
         ty = y1 + (zone_h - th) // 2
 
