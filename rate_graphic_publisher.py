@@ -71,51 +71,15 @@ TEMPLATES = {
     "USACAN": ASSETS_DIR / "updated_cyrus_exchange_usacan_poster.png",
 }
 
-# ─── Price zones — ONLY the number area to clear and rewrite ─────────────────
-# Each tuple: (y_top, y_bot, x_left, x_right, price_key)
-# Determined by pixel-level OCR analysis of each template.
-# These are the EXACT bounding boxes of the price numbers — nothing else is touched.
-PRICE_ZONES: dict[str, list[tuple]] = {
-    "CAD": [
-        (314, 412, 462, 754, "sell"),   # Cash Sell
-        (434, 497, 462, 710, "sell"),   # Left Cheque (same sell price)
-        (525, 596, 462, 710, "sell"),   # E-Transfer (same sell price)
-        (644, 714, 462, 710, "buy"),    # Cash Buy
-        (754, 822, 462, 710, "buy"),    # Cash Buy Direct Transfer
-    ],
-    "USD": [
-        (314, 373, 462, 706, "sell"),   # Cash Sell
-        (424, 481, 462, 706, "sell"),   # Inside USA
-        (533, 592, 462, 706, "sell"),   # USA Personal Transfer
-        (632, 692, 462, 706, "buy"),    # Cash Buy
-        (738, 796, 462, 706, "buy"),    # Cash Buy Direct Transfer
-    ],
-    "EUR": [
-        (352, 558, 615, 830, "sell"),   # Sell
-        (580, 784, 615, 830, "buy"),    # Buy
-    ],
-    "USDT": [
-        (345, 555, 615, 830, "sell"),   # Sell
-        (580, 785, 615, 830, "buy"),    # Buy
-    ],
-    "USACAN": [
-        (360, 550, 615, 845, "sell"),   # Sell
-        (582, 772, 615, 845, "buy"),    # Buy
-    ],
-}
+COORDS_FILE = Path("/var/www/exchange_bot/poster_coordinates.json")
 
-# ─── Date rendering config — per-poster, derived from OCR of original templates ─
-# zone:    (y_top, y_bot, x_left, x_right) — text-only clear area; calendar icon sits left of x_left
-# fa_y:    absolute y_top pixel for the Persian/Shamsi date line
-# en_y:    absolute y_top pixel for the Gregorian date line
-# fa_size: Persian font size (px), en_size: Gregorian font size (px)
-DATE_CONFIG: dict[str, dict] = {
-    "CAD":    {"zone": (184, 252, 387, 700), "fa_y": 188, "en_y": 227, "fa_size": 26, "en_size": 18},
-    "USD":    {"zone": (185, 252, 355, 654), "fa_y": 189, "en_y": 227, "fa_size": 26, "en_size": 18},
-    "EUR":    {"zone": (216, 291, 379, 715), "fa_y": 220, "en_y": 262, "fa_size": 28, "en_size": 20},
-    "USDT":   {"zone": (207, 284, 383, 730), "fa_y": 211, "en_y": 255, "fa_size": 30, "en_size": 21},
-    "USACAN": {"zone": (229, 310, 383, 738), "fa_y": 233, "en_y": 279, "fa_size": 30, "en_size": 21},
-}
+def _load_coords() -> dict:
+    try:
+        return json.loads(COORDS_FILE.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise RuntimeError(f"Cannot load {COORDS_FILE}: {exc}")
+
+POSTER_COORDS: dict = _load_coords()
 
 PUBLISH_ORDER = [
     ("CAD",    "دلار کانادا",  "Canada"),
@@ -187,6 +151,36 @@ def sample_zone_bg(px_rgb, y1: int, y2: int, x1: int, x2: int) -> tuple:
 
 # ─── Poster generator ─────────────────────────────────────────────────────────
 
+def _write_in_box(draw, px_rgb, box: list, text: str, font_path: str,
+                  text_color: tuple, max_font: int = 80, min_font: int = 14):
+    """Clear box, sample bg, center-write text. Shrinks font until text fits."""
+    x1, y1, x2, y2 = box
+    zone_w = x2 - x1
+    zone_h = y2 - y1
+
+    bg = sample_zone_bg(px_rgb, y1, y2, x1, x2)
+    draw.rectangle([x1, y1, x2, y2], fill=(*bg, 255))
+
+    font_size = min(max_font, max(min_font, int(zone_h * 0.60)))
+    font      = load_font(font_path, font_size)
+
+    bb = draw.textbbox((0, 0), text, font=font)
+    tw, th = bb[2] - bb[0], bb[3] - bb[1]
+
+    while tw > zone_w - 8 and font_size > min_font:
+        font_size -= 2
+        font = load_font(font_path, font_size)
+        bb = draw.textbbox((0, 0), text, font=font)
+        tw, th = bb[2] - bb[0], bb[3] - bb[1]
+
+    tx = x1 + (zone_w - tw) // 2
+    ty = y1 + (zone_h - th) // 2
+
+    draw.text((tx + 1, ty + 1), text, font=font, fill=(0, 0, 0, 150))
+    draw.text((tx,     ty),     text, font=font, fill=text_color)
+    return font_size, bg
+
+
 def generate_single_poster(currency: str, cur_name_fa: str,
                             buy: int | None, sell: int | None,
                             toronto_now: datetime) -> Path | None:
@@ -197,78 +191,60 @@ def generate_single_poster(currency: str, cur_name_fa: str,
         log.error(f"[{currency}] Missing template: {template_path}")
         return None
 
+    coords = POSTER_COORDS.get(currency)
+    if not coords:
+        log.error(f"[{currency}] No coordinates in {COORDS_FILE}")
+        return None
+
     log.info(f"[{currency}] Generating poster  sell={sell}  buy={buy}")
 
-    # Always open the ORIGINAL template — never a previously generated file
-    img     = Image.open(template_path).convert("RGBA")
-    draw    = ImageDraw.Draw(img)
-    W, H    = img.size
-    px_rgb  = img.convert("RGB").load()
+    img    = Image.open(template_path).convert("RGBA")
+    draw   = ImageDraw.Draw(img)
+    px_rgb = img.convert("RGB").load()
 
-    prices = {"sell": sell, "buy": buy}
+    sell_str = f"{sell:,}" if sell is not None else "---"
+    buy_str  = f"{buy:,}"  if buy  is not None else "---"
 
-    # ── 1. Write prices into existing price boxes only ─────────────────────
-    for y1, y2, x1, x2, price_key in PRICE_ZONES.get(currency, []):
-        value     = prices.get(price_key)
-        value_str = f"{value:,}" if value is not None else "---"
+    # ── 1. Write prices strictly inside defined boxes ──────────────────────
+    for box in coords.get("sell_boxes", []):
+        fs, bg = _write_in_box(draw, px_rgb, box, sell_str,
+                               FONT_BOLD_EN, (255, 255, 255, 255))
+        log.info(f"  [{currency}] SELL='{sell_str}' box={box} font={fs}px bg={bg}")
 
+    for box in coords.get("buy_boxes", []):
+        fs, bg = _write_in_box(draw, px_rgb, box, buy_str,
+                               FONT_BOLD_EN, (255, 255, 255, 255))
+        log.info(f"  [{currency}] BUY='{buy_str}'  box={box} font={fs}px bg={bg}")
+
+    # ── 2. Update date — strictly inside date_box, calendar icon untouched ─
+    date_box = coords.get("date_box")
+    if date_box:
+        x1, y1, x2, y2 = date_box
         bg = sample_zone_bg(px_rgb, y1, y2, x1, x2)
         draw.rectangle([x1, y1, x2, y2], fill=(*bg, 255))
 
-        zone_w    = x2 - x1
-        zone_h    = y2 - y1
-        font_size = min(80, max(28, int(zone_h * 0.52)))
-        font      = load_font(FONT_BOLD_EN, font_size)
+        box_h   = y2 - y1
+        fa_size = max(14, int(box_h * 0.38))
+        en_size = max(12, int(box_h * 0.27))
 
-        bb = draw.textbbox((0, 0), value_str, font=font)
-        tw = bb[2] - bb[0]
-        th = bb[3] - bb[1]
-
-        # Auto-shrink until text fits inside zone width
-        while tw > zone_w - 8 and font_size > 14:
-            font_size -= 2
-            font = load_font(FONT_BOLD_EN, font_size)
-            bb = draw.textbbox((0, 0), value_str, font=font)
-            tw = bb[2] - bb[0]
-            th = bb[3] - bb[1]
-
-        tx = x1 + (zone_w - tw) // 2
-        ty = y1 + (zone_h - th) // 2
-
-        draw.text((tx + 1, ty + 1), value_str, font=font, fill=(0, 0, 0, 150))
-        draw.text((tx,     ty),     value_str, font=font, fill=(255, 255, 255, 255))
-        log.info(f"  [{currency}] {price_key}='{value_str}' zone y={y1}-{y2} x={x1}-{x2} "
-                 f"font={font_size}px  bg={bg}")
-
-    # ── 2. Update date inside existing date box (calendar icon preserved) ──
-    if currency in DATE_CONFIG:
-        cfg         = DATE_CONFIG[currency]
-        yt, yb, xl, xr = cfg["zone"]
-
-        bg = sample_zone_bg(px_rgb, yt, yb, xl, xr)
-        draw.rectangle([xl, yt, xr, yb], fill=(*bg, 255))
-
-        font_fa = load_font(FONT_BOLD,       cfg["fa_size"])
-        font_en = load_font(FONT_REGULAR_EN, cfg["en_size"])
+        font_fa = load_font(FONT_BOLD,       fa_size)
+        font_en = load_font(FONT_REGULAR_EN, en_size)
 
         date_fa = fa(persian_date_full(toronto_now))
         date_en = toronto_now.strftime("%d %B %Y")
 
-        x_c = (xl + xr) // 2  # horizontal centre of text zone
+        x_c   = (x1 + x2) // 2
+        fa_cy = coords.get("date_fa_cy", y1 + box_h // 3)
+        en_cy = coords.get("date_en_cy", y1 + int(box_h * 0.73))
 
-        # Persian line — anchor="mm" centres text at (x_c, line_centre_y)
-        fa_cy = cfg["fa_y"] + cfg["fa_size"] // 2
         draw.text((x_c, fa_cy), date_fa, font=font_fa,
                   fill=(240, 220, 160, 255), anchor="mm")
-
-        # Gregorian line — same approach
-        en_cy = cfg["en_y"] + cfg["en_size"] // 2
         draw.text((x_c, en_cy), date_en, font=font_en,
                   fill=(220, 200, 140, 255), anchor="mm")
 
-        log.info(f"[{currency}] Date zone y={yt}-{yb} x={xl}-{xr} | "
-                 f"Persian='{date_fa}' @y={cfg['fa_y']} | "
-                 f"Gregorian='{date_en}' @y={cfg['en_y']}")
+        log.info(f"[{currency}] Date box={date_box}  "
+                 f"Persian='{date_fa}'@cy={fa_cy}  "
+                 f"Gregorian='{date_en}'@cy={en_cy}")
 
     # ── 3. Save ────────────────────────────────────────────────────────────
     ts_str   = toronto_now.strftime("%Y-%m-%d-%H%M")
