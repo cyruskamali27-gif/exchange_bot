@@ -181,6 +181,41 @@ def _write_in_box(draw, px_rgb, box: list, text: str, font_path: str,
     return font_size, bg
 
 
+def draw_text_in_box(draw, date_box: list, text: str, font_path: str,
+                     max_font: int, min_font: int, color: tuple,
+                     is_persian: bool = False,
+                     v_center_y: int | None = None) -> int:
+    """
+    Render text centered horizontally inside date_box, auto-shrinking to fit.
+    When is_persian=True, applies arabic_reshaper + bidi before rendering.
+    v_center_y pins the vertical center of the text; if None, centers in box.
+    Returns the actual font size used.
+    """
+    x1, y1, x2, y2 = date_box
+    box_w = x2 - x1
+    box_h = y2 - y1
+
+    render_text = fa(text) if is_persian else text
+
+    font_size = max_font
+    font = load_font(font_path, font_size)
+    bb = draw.textbbox((0, 0), render_text, font=font)
+    tw, th = bb[2] - bb[0], bb[3] - bb[1]
+
+    while tw > box_w - 8 and font_size > min_font:
+        font_size -= 1
+        font = load_font(font_path, font_size)
+        bb = draw.textbbox((0, 0), render_text, font=font)
+        tw, th = bb[2] - bb[0], bb[3] - bb[1]
+
+    tx = x1 + (box_w - tw) // 2
+    ty = (v_center_y - th // 2) if v_center_y is not None else (y1 + (box_h - th) // 2)
+
+    draw.text((tx + 1, ty + 1), render_text, font=font, fill=(0, 0, 0, 180))
+    draw.text((tx,     ty),     render_text, font=font, fill=color)
+    return font_size
+
+
 def generate_single_poster(currency: str, cur_name_fa: str,
                             buy: int | None, sell: int | None,
                             toronto_now: datetime) -> Path | None:
@@ -224,27 +259,27 @@ def generate_single_poster(currency: str, cur_name_fa: str,
         draw.rectangle([x1, y1, x2, y2], fill=(*bg, 255))
 
         box_h   = y2 - y1
-        fa_size = max(14, int(box_h * 0.38))
-        en_size = max(12, int(box_h * 0.27))
+        fa_size = max(14, int(box_h * 0.45))
+        en_size = max(12, int(box_h * 0.32))
 
-        font_fa = load_font(FONT_BOLD,       fa_size)
-        font_en = load_font(FONT_REGULAR_EN, en_size)
-
-        date_fa = fa(persian_date_full(toronto_now))
-        date_en = toronto_now.strftime("%d %B %Y")
-
-        x_c   = (x1 + x2) // 2
         fa_cy = coords.get("date_fa_cy", y1 + box_h // 3)
         en_cy = coords.get("date_en_cy", y1 + int(box_h * 0.73))
 
-        draw.text((x_c, fa_cy), date_fa, font=font_fa,
-                  fill=(240, 220, 160, 255), anchor="mm")
-        draw.text((x_c, en_cy), date_en, font=font_en,
-                  fill=(220, 200, 140, 255), anchor="mm")
+        date_fa_raw = persian_date_full(toronto_now)
+        date_en     = toronto_now.strftime("%d %B %Y")
+
+        fs_fa = draw_text_in_box(draw, date_box, date_fa_raw, FONT_BOLD,
+                                 max_font=fa_size, min_font=10,
+                                 color=(240, 220, 160, 255), is_persian=True,
+                                 v_center_y=fa_cy)
+        fs_en = draw_text_in_box(draw, date_box, date_en, FONT_REGULAR_EN,
+                                 max_font=en_size, min_font=8,
+                                 color=(220, 200, 140, 255), is_persian=False,
+                                 v_center_y=en_cy)
 
         log.info(f"[{currency}] Date box={date_box}  "
-                 f"Persian='{date_fa}'@cy={fa_cy}  "
-                 f"Gregorian='{date_en}'@cy={en_cy}")
+                 f"Persian='{date_fa_raw}'@cy={fa_cy} font={fs_fa}px  "
+                 f"Gregorian='{date_en}'@cy={en_cy} font={fs_en}px")
 
     # ── 3. Save ────────────────────────────────────────────────────────────
     ts_str   = toronto_now.strftime("%Y-%m-%d-%H%M")
