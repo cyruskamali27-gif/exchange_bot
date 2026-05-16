@@ -35,8 +35,13 @@ def register_customer(uid: int) -> None:
         log.info("[GUARD] Customer registered for private DMs: uid=%s", uid)
 
 
+def _bare_id(chat_id: int) -> int:
+    """Strip the Telethon -100 channel prefix so IDs compare equal regardless of form."""
+    return abs(chat_id) % 1_000_000_000_000
+
+
 def is_allowed_group(chat_id: int) -> bool:
-    return _allowed_group_id is not None and chat_id == _allowed_group_id
+    return _allowed_group_id is not None and _bare_id(chat_id) == _bare_id(_allowed_group_id)
 
 
 def is_allowed_target(target: int) -> bool:
