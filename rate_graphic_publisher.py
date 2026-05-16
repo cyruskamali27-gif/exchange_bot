@@ -72,7 +72,6 @@ TEMPLATES = {
 }
 
 COORDS_FILE   = Path("/var/www/exchange_bot/poster_coordinates.json")
-DEBUG_DIR     = Path("/var/www/exchange_bot/debug_dates")
 QC_REPORT_DIR = Path("/var/www/exchange_bot/qc_reports")
 
 def _load_coords() -> dict:
@@ -241,29 +240,6 @@ def _draw_date_in_box(
     }
 
 
-def _save_date_debug(img: Image.Image, currency: str, layout: dict) -> Path:
-    """Save annotated debug image: red box = date_box, green = center line,
-    blue = Persian text bounds, cyan = English text bounds."""
-    DEBUG_DIR.mkdir(parents=True, exist_ok=True)
-    dbg = img.copy()
-    d   = ImageDraw.Draw(dbg)
-
-    x1, y1, x2, y2 = layout["date_box"]
-    fa_y = layout["fa_y"]
-    fa_h = layout["fa_h"]
-    en_y = layout["en_y"]
-    en_h = layout["en_h"]
-
-    d.rectangle([x1 - 2, y1 - 2, x2 + 2, y2 + 2], outline=(255, 0, 0), width=3)
-    mid_y = (y1 + y2) // 2
-    d.line([(x1, mid_y), (x2, mid_y)], fill=(0, 220, 0), width=1)
-    d.rectangle([x1, fa_y, x2, fa_y + fa_h], outline=(80, 80, 255), width=1)
-    d.rectangle([x1, en_y, x2, en_y + en_h], outline=(0, 200, 200), width=1)
-
-    out = DEBUG_DIR / f"debug_date_{currency.lower()}.png"
-    dbg.convert("RGB").save(str(out), "PNG")
-    return out
-
 
 def _qc_date(currency: str, toronto_now: datetime, layout: dict) -> tuple[bool, list]:
     """Validate that rendered date is today, inside the box, and non-overlapping."""
@@ -419,9 +395,7 @@ def generate_single_poster(currency: str, cur_name_fa: str,
     # ── 2. Date — strictly inside date_box, calendar icon untouched ─────────
     date_box = coords.get("date_box")
     if date_box:
-        layout     = _draw_date_in_box(draw, px_rgb, date_box, currency, toronto_now)
-        debug_path = _save_date_debug(img, currency, layout)
-        log.info(f"[{currency}] Debug preview → {debug_path}")
+        layout = _draw_date_in_box(draw, px_rgb, date_box, currency, toronto_now)
 
         qc_ok, qc_errors = _qc_date(currency, toronto_now, layout)
         if not qc_ok:
