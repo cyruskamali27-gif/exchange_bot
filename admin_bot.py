@@ -1,6 +1,10 @@
 import asyncio
 import logging
 from datetime import datetime
+from design_iteration_agent import (
+    register_design_handlers, design_post_init,
+    _pending_screenshot, _detect_region_from_text, REGION_KEYWORDS,
+)
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -594,9 +598,27 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("تصحیح لغو شد.")
         return
 
+    # ── Screenshot pending: attach text as design complaint ──────────────
+    text_msg = (update.message.text or "").strip()
+    if admin_id in _pending_screenshot and text_msg:
+        region = _detect_region_from_text(text_msg)
+        is_design_complaint = any(
+            kw in text_msg.lower()
+            for kws in REGION_KEYWORDS.values()
+            for kw in kws
+        ) or any(w in text_msg.lower() for w in ["خراب", "بد", "درست", "نسخه", "بهتر", "fix", "مشکل"])
+        if is_design_complaint:
+            _pending_screenshot[admin_id]["text"] = text_msg
+            await update.message.reply_text(
+                f"📝 متن شکایت ثبت شد: «{text_msg}»\n"
+                f"ناحیه تشخیص داده شده: {region}\n\n"
+                "برای شروع فیکس خودکار:\n/design_fix_from_screenshot"
+            )
+            return
+
     # ── Numeric CAD → price lookup ────────────────────────────────────
     try:
-        amount = float(update.message.text.replace(",", "").replace(" ", ""))
+        amount = float(text_msg.replace(",", "").replace(" ", ""))
         result = calculate_rate("CAD", amount)
         if result:
             await update.message.reply_text(
@@ -657,7 +679,7 @@ async def cmd_go_live(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     init_db()
-    app = Application.builder().token(BOT_TOKEN).build()
+    app = Application.builder().token(BOT_TOKEN).post_init(design_post_init).build()
     app.add_handler(CommandHandler("start",       start))
     app.add_handler(CommandHandler("report",      cmd_report))
     app.add_handler(CommandHandler("safemode",    cmd_safemode))
@@ -671,6 +693,7 @@ def main():
     app.add_handler(CommandHandler("go_live",     cmd_go_live))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    register_design_handlers(app)
     print("🚀 پنل مدیریت شروع شد...")
     app.run_polling()
 
