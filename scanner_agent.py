@@ -20,6 +20,7 @@ import elevenlabs_agent
 from natural_replies import get_reply
 from agent_memory import log_conversation, detect_customer_tone
 import conversation_qc_agent as _qc
+from qc_command_router import register_qc_handlers
 
 log = logging.getLogger("scanner")
 logging.basicConfig(level=logging.INFO)
@@ -299,6 +300,8 @@ async def run():
     me = await client.get_me()
     _self_id = me.id
     log.info("[SCANNER] Started — self_id=%s (self-messages will be blocked)", _self_id)
+
+    await register_qc_handlers(client)
 
     if TEST_GROUP_ONLY:
         print(f"⚠️  TEST_GROUP_ONLY=true — گروه تست ({TEST_GROUP_ID}) فعال است")
