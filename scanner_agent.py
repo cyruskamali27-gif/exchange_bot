@@ -10,8 +10,9 @@ from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from config import (
     TELETHON_API_ID, TELETHON_API_HASH, TELETHON_PHONE,
     ADMIN_ID, BOT_TOKEN, EXCLUDED_IDS,
-    TEST_GROUP_ONLY, TEST_GROUP_ID,
+    TEST_GROUP_ONLY, TEST_GROUP_ID, ALLOWED_TELEGRAM_CHAT,
 )
+import telegram_guard
 from negotiation_agent import send_intro_message
 import exchange_brain
 from contacted_users import is_contacted, add as add_contacted
@@ -301,6 +302,17 @@ async def run():
     _self_id = me.id
     log.info("[SCANNER] Started — self_id=%s (self-messages will be blocked)", _self_id)
 
+    # ── Security: resolve allowed group and init guard ────────────
+    try:
+        allowed_entity = await client.get_entity(ALLOWED_TELEGRAM_CHAT)
+        _allowed_gid = allowed_entity.id
+        telegram_guard.init(_allowed_gid, ADMIN_ID)
+        log.info("[GUARD] Resolved %s → chat_id=%s", ALLOWED_TELEGRAM_CHAT, _allowed_gid)
+    except Exception as e:
+        log.error("[GUARD] FATAL: could not resolve %s: %s — bot will not send to any group",
+                  ALLOWED_TELEGRAM_CHAT, e)
+        telegram_guard.init(-1, ADMIN_ID)
+
     await register_qc_handlers(client)
 
     if TEST_GROUP_ONLY:
@@ -321,6 +333,7 @@ async def run():
 
         sender = await event.get_sender()
         uid = sender.id
+        telegram_guard.register_customer(uid)  # allow private replies to this user
         customer_sent_voice = False
         text = ""
 
@@ -372,11 +385,12 @@ async def run():
                     log.error("[BRAIN] uid=%s failed: %s", uid, e)
                     reply = "مشکلی پیش اومد، دوباره پیام بده."
                 _record_bot_reply(reply)
-                try:
-                    await client.send_message(uid, reply)
-                    sent_ok = True
-                except Exception as e:
-                    log.error("[SEND_ERROR] uid=%s: %s", uid, e)
+                if telegram_guard.check_send(uid, "test_group_voice_text"):
+                    try:
+                        await client.send_message(uid, reply)
+                        sent_ok = True
+                    except Exception as e:
+                        log.error("[SEND_ERROR] uid=%s: %s", uid, e)
                 await _notify_admin_reply(uid, sender_name, text, reply, "voice_text")
             else:
                 log.info("[ROUTE] uid=%s Voice input detected: ConvAI voice reply", uid)
@@ -388,18 +402,19 @@ async def run():
                     reply_text, audio_bytes = "مشکلی پیش اومد، دوباره پیام بده.", b""
 
                 _record_bot_reply(reply_text)
-                try:
-                    if audio_bytes:
-                        ok = await send_convai_audio(client, uid, audio_bytes)
-                        sent_ok = ok
-                        if not ok:
+                if telegram_guard.check_send(uid, "test_group_voice"):
+                    try:
+                        if audio_bytes:
+                            ok = await send_convai_audio(client, uid, audio_bytes)
+                            sent_ok = ok
+                            if not ok:
+                                await client.send_message(uid, reply_text)
+                                sent_ok = True
+                        else:
                             await client.send_message(uid, reply_text)
                             sent_ok = True
-                    else:
-                        await client.send_message(uid, reply_text)
-                        sent_ok = True
-                except Exception as e:
-                    log.error("[SEND_ERROR] uid=%s: %s", uid, e)
+                    except Exception as e:
+                        log.error("[SEND_ERROR] uid=%s: %s", uid, e)
                 await _notify_admin_reply(uid, sender_name, text, reply_text, "voice")
         else:
             log.info("[ROUTE] uid=%s Incoming message type: text", uid)
@@ -410,11 +425,12 @@ async def run():
                 log.error("[BRAIN] uid=%s failed: %s", uid, e)
                 reply = "مشکلی پیش اومد، دوباره پیام بده."
             _record_bot_reply(reply)
-            try:
-                await client.send_message(uid, reply)
-                sent_ok = True
-            except Exception as e:
-                log.error("[SEND_ERROR] uid=%s: %s", uid, e)
+            if telegram_guard.check_send(uid, "test_group_text"):
+                try:
+                    await client.send_message(uid, reply)
+                    sent_ok = True
+                except Exception as e:
+                    log.error("[SEND_ERROR] uid=%s: %s", uid, e)
             await _notify_admin_reply(uid, sender_name, text, reply, "text")
 
         log.info("[PRIVATE_REPLY_SENT] uid=%s sent_ok=%s", uid, sent_ok)
@@ -425,6 +441,10 @@ async def run():
         if TEST_GROUP_ONLY:
             return
         if event.out or event.is_private:
+            return
+
+        # Only operate in the authorised group
+        if not telegram_guard.is_allowed_group(event.chat_id):
             return
 
         sender = await event.get_sender()
@@ -454,9 +474,13 @@ async def run():
 
         amount = extract_amount(text)
         add_contacted(uid)
+        telegram_guard.register_customer(uid)
         await asyncio.sleep(2)
 
         reply = await send_intro_message(client, uid, "user", t, amount)
+        if not telegram_guard.check_send(uid, "group_lead_intro"):
+            log.warning("[GUARD] Blocked lead intro to uid=%s", uid)
+            return
         await client.send_message(uid, reply)
         _record_bot_reply(reply)
         log.info("[PRIVATE_LEAD_STARTED] uid=%s amount=%s type=%s conf=%.0f%%",
@@ -480,6 +504,12 @@ async def run():
 
         sender = await event.get_sender()
         uid = sender.id
+
+        # Only handle DMs from ADMIN or customers seen in @cyrusGlobalExchange
+        if not telegram_guard.is_allowed_target(uid):
+            log.info("[GUARD] Blocked private DM from unregistered uid=%s", uid)
+            return
+
         customer_sent_voice = False
         text = ""
 

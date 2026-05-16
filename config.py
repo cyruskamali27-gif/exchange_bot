@@ -26,6 +26,8 @@ ELEVENLABS_AGENT_ID = os.environ.get("ELEVENLABS_AGENT_ID", "")
 ADMIN_APPROVAL_THRESHOLD = int(os.environ.get("ADMIN_APPROVAL_THRESHOLD", 1000))
 EXCLUDED_IDS = []
 
+ALLOWED_TELEGRAM_CHAT = os.environ.get("ALLOWED_TELEGRAM_CHAT", "@cyrusGlobalExchange")
+
 BUY_SPREAD_TOMAN  = int(os.environ.get("BUY_SPREAD_TOMAN",  4000))
 SELL_SPREAD_TOMAN = int(os.environ.get("SELL_SPREAD_TOMAN",  500))
 
