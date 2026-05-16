@@ -19,6 +19,7 @@ from voice_agent import voice_to_text, send_convai_audio
 import elevenlabs_agent
 from natural_replies import get_reply
 from agent_memory import log_conversation, detect_customer_tone
+import conversation_qc_agent as _qc
 
 log = logging.getLogger("scanner")
 logging.basicConfig(level=logging.INFO)
@@ -205,6 +206,88 @@ async def _handle_message(client, uid, text, customer_sent_voice=False, sender_n
     )
 
 
+# ── QC: ConvAI voice reply with quality check ────────────────────────────────
+
+async def _convai_with_qc(uid: int, text: str) -> tuple[str, bytes]:
+    """
+    Call ElevenLabs ConvAI, then run QC on the reply text.
+    If QC rewrites the text, return empty audio (caller sends text instead).
+    """
+    reply_text, audio_bytes = await elevenlabs_agent.chat_with_audio(uid, text)
+
+    status = _qc.get_qc_status(uid)
+    if status["enabled"]:
+        approved = await _qc.inspect_reply(uid, reply_text)
+        if approved != reply_text:
+            # Text was rewritten — audio no longer matches; force text reply
+            log.info("[QC] uid=%s ConvAI text rewritten — falling back to text", uid)
+            return approved, b""
+        return reply_text, audio_bytes
+    else:
+        # QC off: still update state tracking
+        await _qc.inspect_reply(uid, reply_text)
+        return reply_text, audio_bytes
+
+
+# ── Admin QC commands ─────────────────────────────────────────────────────────
+
+async def _handle_qc_command(text: str) -> str | None:
+    """
+    Handle /conv_qc_* commands from admin.
+    Returns reply string or None if not a recognised command.
+    """
+    cmd = text.strip().lower().split()[0]
+
+    if cmd == "/conv_qc_on":
+        _qc.enable_qc()
+        return "QC روشن شد — همه پاسخ‌ها بررسی می‌شوند."
+
+    if cmd == "/conv_qc_off":
+        _qc.disable_qc()
+        return "QC خاموش شد — پاسخ‌ها بدون بررسی ارسال می‌شوند."
+
+    if cmd == "/conv_qc_status":
+        st = _qc.get_qc_status()
+        enabled_fa = "روشن ✅" if st["enabled"] else "خاموش ❌"
+        return (
+            f"وضعیت QC: {enabled_fa}\n"
+            f"آستانه بازنویسی: {st['threshold']:.0%}\n"
+            f"کارکرد: بررسی تکرار + روباتیک + لهجه + فارسی طبیعی"
+        )
+
+    if cmd == "/conv_last_reply":
+        reply = _qc.get_last_reply()
+        if reply:
+            return f"آخرین پاسخ ارسال‌شده:\n\n{reply}"
+        return "هنوز پاسخی در این سشن ثبت نشده."
+
+    if cmd == "/conv_last_qc":
+        result = _qc.get_last_qc()
+        if not result:
+            return "نتیجه QC‌ای ثبت نشده."
+        sc = result["scores"]
+        issues = result.get("issues") or []
+        rewritten_fa = "بله ✏️" if result["was_rewritten"] else "خیر"
+        return (
+            f"آخرین بررسی QC:\n"
+            f"امتیاز کلی: {sc['overall']:.2f}/1.00\n"
+            f"انسانی: {sc['human']:.2f}   "
+            f"تکرار: {sc['repetition']:.2f}\n"
+            f"روانی: {sc['fluency']:.2f}   "
+            f"فارسی طبیعی: {sc['persian_naturalness']:.2f}\n"
+            f"مشکلات: {', '.join(issues) or 'هیچ'}\n"
+            f"بازنویسی شد: {rewritten_fa}"
+        )
+
+    if cmd == "/conv_rewrite_last":
+        new_reply = await _qc.rewrite_last()
+        if new_reply:
+            return f"پاسخ بازنویسی‌شده:\n\n{new_reply}"
+        return "پاسخی برای بازنویسی نیست."
+
+    return None
+
+
 # ── Main ─────────────────────────────────────────────────────────
 
 async def run():
@@ -296,7 +379,7 @@ async def run():
                 log.info("[ROUTE] uid=%s Voice input detected: ConvAI voice reply", uid)
                 log.info("[ROUTE] uid=%s No greeting injected by Telegram code", uid)
                 try:
-                    reply_text, audio_bytes = await elevenlabs_agent.chat_with_audio(uid, text)
+                    reply_text, audio_bytes = await _convai_with_qc(uid, text)
                 except Exception as e:
                     log.error("[CONVAI] uid=%s failed: %s", uid, e)
                     reply_text, audio_bytes = "مشکلی پیش اومد، دوباره پیام بده.", b""
@@ -397,6 +480,17 @@ async def run():
         customer_sent_voice = False
         text = ""
 
+        # ── Admin QC commands (text-only, no voice) ───────────────
+        raw_text = event.message.message or ""
+        if uid == ADMIN_ID and raw_text.startswith("/conv_"):
+            result = await _handle_qc_command(raw_text)
+            if result is not None:
+                try:
+                    await client.send_message(uid, result)
+                except Exception as e:
+                    log.error("[QC_CMD] send failed: %s", e)
+                return
+
         if event.message.voice:
             customer_sent_voice = True
             log.info("[VOICE_STEP] uid=%s step=telegram_voice_received", uid)
@@ -475,7 +569,7 @@ async def run():
                 log.info("[ROUTE] uid=%s No greeting injected by Telegram code", uid)
                 log.info("[VOICE_STEP] uid=%s step=convai_start text=%r", uid, text[:60])
                 try:
-                    reply_text, audio_bytes = await elevenlabs_agent.chat_with_audio(uid, text)
+                    reply_text, audio_bytes = await _convai_with_qc(uid, text)
                     log.info("[VOICE_STEP] uid=%s step=convai_ok reply=%r audio=%d bytes",
                              uid, reply_text[:80], len(audio_bytes))
                 except Exception as e:
