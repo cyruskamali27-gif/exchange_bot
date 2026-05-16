@@ -58,8 +58,8 @@ BUY_ADJ  = int(os.environ.get("PUBLISHER_BUY_ADJ", "500"))
 # SELL_ADJ is ZERO — Cyrus sell = Bahmani sell exactly
 SELL_ADJ = 0
 
-FONT_BOLD       = "/usr/share/fonts/truetype/noto/NotoSansArabic-Bold.ttf"
-FONT_REGULAR    = "/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf"
+FONT_BOLD       = "/usr/share/fonts/truetype/noto/NotoNaskhArabic-Bold.ttf"
+FONT_REGULAR    = "/usr/share/fonts/truetype/noto/NotoNaskhArabic-Regular.ttf"
 FONT_BOLD_EN    = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 FONT_REGULAR_EN = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 
@@ -71,7 +71,9 @@ TEMPLATES = {
     "USACAN": ASSETS_DIR / "updated_cyrus_exchange_usacan_poster.png",
 }
 
-COORDS_FILE = Path("/var/www/exchange_bot/poster_coordinates.json")
+COORDS_FILE   = Path("/var/www/exchange_bot/poster_coordinates.json")
+DEBUG_DIR     = Path("/var/www/exchange_bot/debug_dates")
+QC_REPORT_DIR = Path("/var/www/exchange_bot/qc_reports")
 
 def _load_coords() -> dict:
     try:
@@ -147,6 +149,165 @@ def sample_zone_bg(px_rgb, y1: int, y2: int, x1: int, x2: int) -> tuple:
         sum(s[1] for s in dark) // len(dark),
         sum(s[2] for s in dark) // len(dark),
     )
+
+
+# ─── Date rendering helpers ───────────────────────────────────────────────────
+
+def _draw_date_in_box(
+    draw: ImageDraw.ImageDraw,
+    px_rgb,
+    date_box: list,
+    currency: str,
+    toronto_now: datetime,
+) -> dict:
+    """
+    Clean date_box with matched background, then draw Persian line (top) and
+    English line (below), both centered horizontally.  Vertical positions are
+    computed dynamically from actual rendered text heights — no hardcoded cy.
+    Returns layout dict used for debug preview and QC.
+    """
+    x1, y1, x2, y2 = date_box
+    box_w = x2 - x1
+    box_h = y2 - y1
+
+    bg = sample_zone_bg(px_rgb, y1, y2, x1, x2)
+    draw.rectangle([x1, y1, x2, y2], fill=(*bg, 255))
+
+    date_fa_raw      = persian_date_full(toronto_now)
+    date_en          = f"{toronto_now.day} {toronto_now.strftime('%B %Y')}"
+    date_fa_rendered = fa(date_fa_raw)
+
+    LINE_GAP = max(3, int(box_h * 0.08))
+    PADDING  = max(3, int(box_h * 0.06))
+
+    fa_size = max(10, int(box_h * 0.44))
+    while fa_size >= 10:
+        fa_font = load_font(FONT_BOLD, fa_size)
+        bb = draw.textbbox((0, 0), date_fa_rendered, font=fa_font)
+        if (bb[2] - bb[0]) <= box_w - 8:
+            break
+        fa_size -= 1
+
+    en_size = max(8, int(box_h * 0.31))
+    while en_size >= 8:
+        en_font = load_font(FONT_REGULAR_EN, en_size)
+        bb = draw.textbbox((0, 0), date_en, font=en_font)
+        if (bb[2] - bb[0]) <= box_w - 8:
+            break
+        en_size -= 1
+
+    fa_font = load_font(FONT_BOLD, fa_size)
+    en_font = load_font(FONT_REGULAR_EN, en_size)
+
+    fa_bb = draw.textbbox((0, 0), date_fa_rendered, font=fa_font)
+    en_bb = draw.textbbox((0, 0), date_en, font=en_font)
+
+    fa_w = fa_bb[2] - fa_bb[0]
+    fa_h = fa_bb[3] - fa_bb[1]
+    en_w = en_bb[2] - en_bb[0]
+    en_h = en_bb[3] - en_bb[1]
+
+    total_h   = fa_h + LINE_GAP + en_h
+    block_top = y1 + max(PADDING, (box_h - total_h) // 2)
+
+    fa_y = block_top
+    en_y = fa_y + fa_h + LINE_GAP
+
+    fa_x = x1 + (box_w - fa_w) // 2
+    en_x = x1 + (box_w - en_w) // 2
+
+    SHADOW   = (0, 0, 0, 180)
+    COLOR_FA = (240, 220, 160, 255)
+    COLOR_EN = (220, 200, 140, 255)
+
+    draw.text((fa_x + 1, fa_y + 1), date_fa_rendered, font=fa_font, fill=SHADOW)
+    draw.text((fa_x,     fa_y),     date_fa_rendered, font=fa_font, fill=COLOR_FA)
+    draw.text((en_x + 1, en_y + 1), date_en,          font=en_font, fill=SHADOW)
+    draw.text((en_x,     en_y),     date_en,          font=en_font, fill=COLOR_EN)
+
+    log.info(
+        f"[{currency}] Date '{date_fa_raw}' / '{date_en}'  "
+        f"fa={fa_size}px en={en_size}px  "
+        f"fa_y={fa_y}→{fa_y+fa_h}  en_y={en_y}→{en_y+en_h}  "
+        f"box=[{y1},{y2}] bg={bg}"
+    )
+    return {
+        "date_box": date_box,
+        "date_fa":  date_fa_raw,
+        "date_en":  date_en,
+        "fa_y": fa_y, "fa_h": fa_h, "fa_w": fa_w, "fa_size": fa_size,
+        "en_y": en_y, "en_h": en_h, "en_w": en_w, "en_size": en_size,
+        "bg":   bg,
+    }
+
+
+def _save_date_debug(img: Image.Image, currency: str, layout: dict) -> Path:
+    """Save annotated debug image: red box = date_box, green = center line,
+    blue = Persian text bounds, cyan = English text bounds."""
+    DEBUG_DIR.mkdir(parents=True, exist_ok=True)
+    dbg = img.copy()
+    d   = ImageDraw.Draw(dbg)
+
+    x1, y1, x2, y2 = layout["date_box"]
+    fa_y = layout["fa_y"]
+    fa_h = layout["fa_h"]
+    en_y = layout["en_y"]
+    en_h = layout["en_h"]
+
+    d.rectangle([x1 - 2, y1 - 2, x2 + 2, y2 + 2], outline=(255, 0, 0), width=3)
+    mid_y = (y1 + y2) // 2
+    d.line([(x1, mid_y), (x2, mid_y)], fill=(0, 220, 0), width=1)
+    d.rectangle([x1, fa_y, x2, fa_y + fa_h], outline=(80, 80, 255), width=1)
+    d.rectangle([x1, en_y, x2, en_y + en_h], outline=(0, 200, 200), width=1)
+
+    out = DEBUG_DIR / f"debug_date_{currency.lower()}.png"
+    dbg.convert("RGB").save(str(out), "PNG")
+    return out
+
+
+def _qc_date(currency: str, toronto_now: datetime, layout: dict) -> tuple[bool, list]:
+    """Validate that rendered date is today, inside the box, and non-overlapping."""
+    errors = []
+    x1, y1, x2, y2 = layout["date_box"]
+
+    expected_en = f"{toronto_now.day} {toronto_now.strftime('%B %Y')}"
+    if layout["date_en"] != expected_en:
+        errors.append(f"English date: got '{layout['date_en']}', expected '{expected_en}'")
+
+    if HAS_JDATE:
+        jd      = jdatetime.datetime.fromgregorian(datetime=toronto_now)
+        year_fa = str(jd.year).translate(str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹"))
+        if year_fa not in layout["date_fa"]:
+            errors.append(f"Persian year {year_fa} not found in '{layout['date_fa']}'")
+
+    if layout["fa_y"] < y1:
+        errors.append(f"Persian text above box (fa_y={layout['fa_y']} < {y1})")
+    if layout["en_y"] + layout["en_h"] > y2:
+        errors.append(f"English text below box ({layout['en_y'] + layout['en_h']} > {y2})")
+
+    if layout["fa_y"] + layout["fa_h"] > layout["en_y"]:
+        errors.append(
+            f"Overlap: Persian bottom={layout['fa_y'] + layout['fa_h']} "
+            f"> English top={layout['en_y']}"
+        )
+
+    if layout["fa_w"] < 20:
+        errors.append(f"Persian text too narrow (fa_w={layout['fa_w']})")
+    if layout["en_w"] < 20:
+        errors.append(f"English text too narrow (en_w={layout['en_w']})")
+
+    return len(errors) == 0, errors
+
+
+def _save_qc_error(currency: str, errors: list, toronto_now: datetime):
+    QC_REPORT_DIR.mkdir(parents=True, exist_ok=True)
+    report = {"currency": currency, "timestamp": toronto_now.isoformat(), "errors": errors}
+    ts    = toronto_now.strftime("%Y%m%d_%H%M%S")
+    fname = QC_REPORT_DIR / f"qc_fail_{currency.lower()}_{ts}.json"
+    fname.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    log.error(f"[{currency}] Date QC FAILED → {fname}")
+    for e in errors:
+        log.error(f"  • {e}")
 
 
 # ─── Poster generator ─────────────────────────────────────────────────────────
@@ -255,35 +416,17 @@ def generate_single_poster(currency: str, cur_name_fa: str,
                                FONT_BOLD_EN, (255, 255, 255, 255))
         log.info(f"  [{currency}] BUY='{buy_str}'  box={box} font={fs}px bg={bg}")
 
-    # ── 2. Update date — strictly inside date_box, calendar icon untouched ─
+    # ── 2. Date — strictly inside date_box, calendar icon untouched ─────────
     date_box = coords.get("date_box")
     if date_box:
-        x1, y1, x2, y2 = date_box
-        bg = sample_zone_bg(px_rgb, y1, y2, x1, x2)
-        draw.rectangle([x1, y1, x2, y2], fill=(*bg, 255))
+        layout     = _draw_date_in_box(draw, px_rgb, date_box, currency, toronto_now)
+        debug_path = _save_date_debug(img, currency, layout)
+        log.info(f"[{currency}] Debug preview → {debug_path}")
 
-        box_h   = y2 - y1
-        fa_size = max(14, int(box_h * 0.45))
-        en_size = max(12, int(box_h * 0.32))
-
-        fa_cy = coords.get("date_fa_cy", y1 + box_h // 3)
-        en_cy = coords.get("date_en_cy", y1 + int(box_h * 0.73))
-
-        date_fa_raw = persian_date_full(toronto_now)
-        date_en     = toronto_now.strftime("%d %B %Y")
-
-        fs_fa = draw_text_in_box(draw, date_box, date_fa_raw, FONT_BOLD,
-                                 max_font=fa_size, min_font=10,
-                                 color=(240, 220, 160, 255), is_persian=True,
-                                 v_center_y=fa_cy)
-        fs_en = draw_text_in_box(draw, date_box, date_en, FONT_REGULAR_EN,
-                                 max_font=en_size, min_font=8,
-                                 color=(220, 200, 140, 255), is_persian=False,
-                                 v_center_y=en_cy)
-
-        log.info(f"[{currency}] Date box={date_box}  "
-                 f"Persian='{date_fa_raw}'@cy={fa_cy} font={fs_fa}px  "
-                 f"Gregorian='{date_en}'@cy={en_cy} font={fs_en}px")
+        qc_ok, qc_errors = _qc_date(currency, toronto_now, layout)
+        if not qc_ok:
+            _save_qc_error(currency, qc_errors, toronto_now)
+            return None
 
     # ── 3. Save ────────────────────────────────────────────────────────────
     ts_str   = toronto_now.strftime("%Y-%m-%d-%H%M")
