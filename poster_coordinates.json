@@ -1,8 +1,8 @@
 {
-  "_note": "Templates are 1448x1086. Coordinates verified via OCR on updated templates (2026-05-17). date_overlay replaces old date_box system — text rendered directly on header background, no rectangle drawn.",
+  "_note": "Templates are 1448x1086. date_overlay uses clean_bg=True — erases stars/placeholders before writing date. Y bounds start AFTER the Persian title and end just before the first sell_box. Coordinates locked — do not adjust dynamically.",
   "CAD": {
     "size": [1448, 1086],
-    "date_overlay": [260, 195, 1080, 335],
+    "date_overlay": [260, 215, 1080, 340],
     "sell_boxes": [
       [545, 342, 878, 422],
       [545, 464, 878, 545],
@@ -16,7 +16,7 @@
   },
   "USD": {
     "size": [1448, 1086],
-    "date_overlay": [260, 195, 1080, 335],
+    "date_overlay": [260, 195, 1080, 340],
     "sell_boxes": [
       [503, 342, 852, 426],
       [503, 464, 852, 549],
@@ -30,7 +30,7 @@
   },
   "EUR": {
     "size": [1448, 1086],
-    "date_overlay": [260, 235, 1170, 372],
+    "date_overlay": [260, 205, 1100, 373],
     "sell_boxes": [
       [684, 375, 972, 600]
     ],
@@ -41,7 +41,7 @@
   },
   "USDT": {
     "size": [1448, 1086],
-    "date_overlay": [260, 235, 1170, 370],
+    "date_overlay": [260, 162, 1100, 370],
     "sell_boxes": [
       [684, 375, 972, 595]
     ],
@@ -52,7 +52,7 @@
   },
   "USACAN": {
     "size": [1448, 1086],
-    "date_overlay": [260, 245, 1170, 385],
+    "date_overlay": [260, 167, 1100, 385],
     "sell_boxes": [
       [728, 385, 1012, 532]
     ],

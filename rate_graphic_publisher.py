@@ -346,13 +346,13 @@ def generate_single_poster(currency: str, cur_name_fa: str,
             min_font_size=12,
             max_font_size=52,
             padding_x=24,
-            padding_y=8,
-            line_spacing=5,
+            padding_y=10,
+            line_spacing=6,
             rtl_lines=date_data["rtl_lines"],
             shadow=True,
             border_color=None,
             border_width=0,
-            clean_bg=False,
+            clean_bg=True,
         )
         log.info(f"[{currency}] Date overlay rendered in {date_overlay}")
 
