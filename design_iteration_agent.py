@@ -38,6 +38,12 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from PIL import Image, ImageDraw, ImageFont
+from smart_text_engine import (
+    draw_date_box    as _smart_draw_date_box,
+    qc_date_fit      as _smart_qc_date_fit,
+    save_debug_preview,
+    get_today_date_lines,
+)
 from dotenv import load_dotenv
 from telegram import Update, Bot
 from telegram.ext import Application, CommandHandler, ContextTypes
@@ -220,6 +226,7 @@ def sample_bg(px_rgb, x1: int, y1: int, x2: int, y2: int) -> tuple:
 
 
 def _fit_text(draw, text: str, font_path: str, start_size: int, max_width: int, min_size: int = 9):
+    """Legacy shim — used only by any remaining callers outside date-box rendering."""
     size = start_size
     while size >= min_size:
         font = load_font(font_path, size)
@@ -634,92 +641,21 @@ def _load_best_good_layout(currency: str) -> dict | None:
 # ── Preview poster generation ─────────────────────────────────────────────────
 
 def _draw_date_box_3line(
-    draw: ImageDraw.ImageDraw,
-    px_rgb,
+    draw,           # unused — kept for call-site compatibility
+    px_rgb,         # unused — smart engine resamples internally
     date_box: list,
     dt: datetime,
     adj: dict = None,
+    _image: "Image.Image | None" = None,
 ) -> dict:
     """
-    Draw restored date box with 3 lines:
-      Line 1 — Shamsi date  (۱۴۰۵/۰۲/۲۶)
-      Line 2 — Persian weekday  (شنبه)
-      Line 3 — Gregorian date  (16 May 2026)
-    Accepts optional adj dict: y_offset, font_scale, padding_extra.
-    Returns layout dict used by QC engine.
+    Thin wrapper: delegates to smart_text_engine.draw_date_box.
+    All sizing, centering, RTL reshaping, bg cleaning handled there.
     """
-    if adj is None:
-        adj = {}
-    y_offset      = int(adj.get("y_offset", 0))
-    font_scale    = float(adj.get("font_scale", 1.0))
-    padding_extra = int(adj.get("padding_extra", 0))
-
-    x1, y1, x2, y2 = date_box
-    box_w = x2 - x1
-    box_h = y2 - y1
-
-    bg = sample_bg(px_rgb, x1, y1, x2, y2)
-    box_bg = (max(0, bg[0] - 25), max(0, bg[1] - 25), max(0, bg[2] - 10))
-    draw.rectangle([x1, y1, x2, y2], fill=(*box_bg, 255))
-    draw.rectangle([x1, y1, x2, y2], outline=(185, 155, 75, 255), width=2)
-
-    shamsi_raw  = get_shamsi_date(dt)
-    weekday_raw = get_persian_weekday(dt)
-    gregorian   = get_gregorian_date(dt)
-
-    shamsi_r  = fa(shamsi_raw)
-    weekday_r = fa(weekday_raw)
-
-    PADDING = max(4, int(box_h * 0.08)) + padding_extra
-    GAP     = max(2, int(box_h * 0.06))
-    avail_h = box_h - 2 * PADDING - 2 * GAP
-    line_h  = max(10, avail_h // 3)
-
-    fa1_font, fa1_bb, _ = _fit_text(draw, shamsi_r,  FONT_BOLD_FA, int(line_h * 0.90 * font_scale), box_w)
-    fa2_font, fa2_bb, _ = _fit_text(draw, weekday_r, FONT_BOLD_FA, int(line_h * 0.85 * font_scale), box_w)
-    en_font,  en_bb,  _ = _fit_text(draw, gregorian, FONT_BOLD_EN, int(line_h * 0.78 * font_scale), box_w)
-
-    h1, w1 = fa1_bb[3] - fa1_bb[1], fa1_bb[2] - fa1_bb[0]
-    h2, w2 = fa2_bb[3] - fa2_bb[1], fa2_bb[2] - fa2_bb[0]
-    h3, w3 = en_bb[3]  - en_bb[1],  en_bb[2]  - en_bb[0]
-
-    total_h = h1 + h2 + h3 + 2 * GAP
-    start_y = y1 + max(PADDING, (box_h - total_h) // 2) + y_offset
-
-    yl1 = start_y
-    yl2 = yl1 + h1 + GAP
-    yl3 = yl2 + h2 + GAP
-
-    xl1 = x1 + (box_w - w1) // 2
-    xl2 = x1 + (box_w - w2) // 2
-    xl3 = x1 + (box_w - w3) // 2
-
-    SHADOW   = (0, 0, 0, 180)
-    COLOR_FA = (242, 222, 148, 255)
-    COLOR_EN = (210, 190, 120, 255)
-
-    draw.text((xl1 + 1, yl1 + 1), shamsi_r,  font=fa1_font, fill=SHADOW)
-    draw.text((xl1,     yl1),     shamsi_r,  font=fa1_font, fill=COLOR_FA)
-    draw.text((xl2 + 1, yl2 + 1), weekday_r, font=fa2_font, fill=SHADOW)
-    draw.text((xl2,     yl2),     weekday_r, font=fa2_font, fill=COLOR_FA)
-    draw.text((xl3 + 1, yl3 + 1), gregorian, font=en_font,  fill=SHADOW)
-    draw.text((xl3,     yl3),     gregorian, font=en_font,  fill=COLOR_EN)
-
-    log.info(
-        f"DateBox | shamsi='{shamsi_raw}' weekday='{weekday_raw}' greg='{gregorian}' "
-        f"h1={h1} h2={h2} h3={h3} gap={GAP} y_offset={y_offset} font_scale={font_scale:.2f}"
-    )
-
-    return {
-        "date_box": date_box,
-        "shamsi":   shamsi_raw,
-        "weekday":  weekday_raw,
-        "gregorian": gregorian,
-        "y1": yl1, "h1": h1, "w1": w1,
-        "y2": yl2, "h2": h2, "w2": w2,
-        "y3": yl3, "h3": h3, "w3": w3,
-        "box_x1": x1, "box_y1": y1, "box_x2": x2, "box_y2": y2,
-    }
+    if _image is None:
+        log.warning("_draw_date_box_3line: no _image passed — cannot render via smart engine")
+        return {}
+    return _smart_draw_date_box(_image, date_box, "?", dt, adj, debug=False)
 
 
 def _load_coords() -> dict:
@@ -747,11 +683,10 @@ def generate_preview(currency: str, iteration: int, dt: datetime, adj: dict = No
         return None
 
     try:
-        img    = Image.open(template_path).convert("RGBA")
-        draw   = ImageDraw.Draw(img)
-        px_rgb = img.convert("RGB").load()
+        img = Image.open(template_path).convert("RGBA")
 
-        layout = _draw_date_box_3line(draw, px_rgb, date_box, dt, adj)
+        # Smart engine handles all sizing, RTL, centering, bg-cleaning internally.
+        layout = _smart_draw_date_box(img, date_box, currency, dt, adj, debug=False)
 
         ts  = dt.strftime("%Y%m%d_%H%M%S")
         out = PREVIEWS_DIR / f"iter{iteration}_{currency.lower()}_{ts}.png"
@@ -782,54 +717,15 @@ def generate_all_previews(iteration: int, render_adj: dict = None) -> list:
 # ── QC Engine ─────────────────────────────────────────────────────────────────
 
 def qc_single(currency: str, layout: dict, dt: datetime) -> tuple:
-    errors = []
+    """Delegate to smart_text_engine.qc_date_fit for consistent QC across both renderers."""
     if not layout:
         return False, ["No layout data"]
-
-    box_x1 = layout["box_x1"]
-    box_y1 = layout["box_y1"]
-    box_x2 = layout["box_x2"]
-    box_y2 = layout["box_y2"]
-    box_w  = box_x2 - box_x1
-
-    if HAS_JDATE:
-        jd     = jdatetime.datetime.fromgregorian(datetime=dt)
-        exp_sh = (
-            str(jd.year).translate(_FA_DIGITS) + "/"
-            + str(jd.month).zfill(2).translate(_FA_DIGITS) + "/"
-            + str(jd.day).zfill(2).translate(_FA_DIGITS)
-        )
-        if layout["shamsi"] != exp_sh:
-            errors.append(f"Shamsi wrong: got '{layout['shamsi']}', expected '{exp_sh}'")
-
-    exp_gr = dt.strftime("%-d %B %Y")
-    if layout["gregorian"] != exp_gr:
-        errors.append(f"Gregorian wrong: got '{layout['gregorian']}', expected '{exp_gr}'")
-
-    exp_wd = _WEEKDAYS[dt.weekday()]
-    if layout["weekday"] != exp_wd:
-        errors.append(f"Weekday wrong: got '{layout['weekday']}', expected '{exp_wd}'")
-
-    if layout["y1"] + layout["h1"] > layout["y2"]:
-        errors.append(f"Overlap L1-L2: bottom={layout['y1']+layout['h1']} > top={layout['y2']}")
-    if layout["y2"] + layout["h2"] > layout["y3"]:
-        errors.append(f"Overlap L2-L3: bottom={layout['y2']+layout['h2']} > top={layout['y3']}")
-
-    if layout["y1"] < box_y1:
-        errors.append(f"Line 1 above box top ({layout['y1']} < {box_y1})")
-    if layout["y3"] + layout["h3"] > box_y2 + 2:
-        errors.append(f"Line 3 below box bottom ({layout['y3']+layout['h3']} > {box_y2})")
-
-    for label, w in [("Shamsi", layout["w1"]), ("Weekday", layout["w2"]), ("Greg", layout["w3"])]:
-        if w < 15:
-            errors.append(f"{label} text too narrow ({w}px)")
-
-    for label, w in [("Shamsi", layout["w1"]), ("Weekday", layout["w2"]), ("Greg", layout["w3"])]:
-        margin = (box_w - w) / 2
-        if margin < 2:
-            errors.append(f"{label} text wider than box (margin={margin:.0f}px)")
-
-    return len(errors) == 0, errors
+    box = layout.get("date_box", [
+        layout.get("box_x1", 0), layout.get("box_y1", 0),
+        layout.get("box_x2", 0), layout.get("box_y2", 0),
+    ])
+    passed, errors, _score = _smart_qc_date_fit(layout, box, dt, currency)
+    return passed, errors
 
 
 def run_qc(previews: list, dt: datetime) -> dict:

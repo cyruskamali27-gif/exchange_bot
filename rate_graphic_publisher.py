@@ -33,6 +33,8 @@ except ImportError:
     HAS_BIDI = False
     logging.warning("arabic-reshaper / python-bidi not installed")
 
+from smart_text_engine import draw_date_box as _smart_draw_date_box, qc_date_fit as _smart_qc_date
+
 try:
     import jdatetime
     HAS_JDATE = True
@@ -150,129 +152,15 @@ def sample_zone_bg(px_rgb, y1: int, y2: int, x1: int, x2: int) -> tuple:
     )
 
 
-# ─── Date rendering helpers ───────────────────────────────────────────────────
-
-def _draw_date_in_box(
-    draw: ImageDraw.ImageDraw,
-    px_rgb,
-    date_box: list,
-    currency: str,
-    toronto_now: datetime,
-) -> dict:
-    """
-    Clean date_box with matched background, then draw Persian line (top) and
-    English line (below), both centered horizontally.  Vertical positions are
-    computed dynamically from actual rendered text heights — no hardcoded cy.
-    Returns layout dict used for debug preview and QC.
-    """
-    x1, y1, x2, y2 = date_box
-    box_w = x2 - x1
-    box_h = y2 - y1
-
-    bg = sample_zone_bg(px_rgb, y1, y2, x1, x2)
-    draw.rectangle([x1, y1, x2, y2], fill=(*bg, 255))
-
-    date_fa_raw      = persian_date_full(toronto_now)
-    date_en          = f"{toronto_now.day} {toronto_now.strftime('%B %Y')}"
-    date_fa_rendered = fa(date_fa_raw)
-
-    LINE_GAP = max(3, int(box_h * 0.08))
-    PADDING  = max(3, int(box_h * 0.06))
-
-    fa_size = max(10, int(box_h * 0.44))
-    while fa_size >= 10:
-        fa_font = load_font(FONT_BOLD, fa_size)
-        bb = draw.textbbox((0, 0), date_fa_rendered, font=fa_font)
-        if (bb[2] - bb[0]) <= box_w - 8:
-            break
-        fa_size -= 1
-
-    en_size = max(8, int(box_h * 0.31))
-    while en_size >= 8:
-        en_font = load_font(FONT_REGULAR_EN, en_size)
-        bb = draw.textbbox((0, 0), date_en, font=en_font)
-        if (bb[2] - bb[0]) <= box_w - 8:
-            break
-        en_size -= 1
-
-    fa_font = load_font(FONT_BOLD, fa_size)
-    en_font = load_font(FONT_REGULAR_EN, en_size)
-
-    fa_bb = draw.textbbox((0, 0), date_fa_rendered, font=fa_font)
-    en_bb = draw.textbbox((0, 0), date_en, font=en_font)
-
-    fa_w = fa_bb[2] - fa_bb[0]
-    fa_h = fa_bb[3] - fa_bb[1]
-    en_w = en_bb[2] - en_bb[0]
-    en_h = en_bb[3] - en_bb[1]
-
-    total_h   = fa_h + LINE_GAP + en_h
-    block_top = y1 + max(PADDING, (box_h - total_h) // 2)
-
-    fa_y = block_top
-    en_y = fa_y + fa_h + LINE_GAP
-
-    fa_x = x1 + (box_w - fa_w) // 2
-    en_x = x1 + (box_w - en_w) // 2
-
-    SHADOW   = (0, 0, 0, 180)
-    COLOR_FA = (240, 220, 160, 255)
-    COLOR_EN = (220, 200, 140, 255)
-
-    draw.text((fa_x + 1, fa_y + 1), date_fa_rendered, font=fa_font, fill=SHADOW)
-    draw.text((fa_x,     fa_y),     date_fa_rendered, font=fa_font, fill=COLOR_FA)
-    draw.text((en_x + 1, en_y + 1), date_en,          font=en_font, fill=SHADOW)
-    draw.text((en_x,     en_y),     date_en,          font=en_font, fill=COLOR_EN)
-
-    log.info(
-        f"[{currency}] Date '{date_fa_raw}' / '{date_en}'  "
-        f"fa={fa_size}px en={en_size}px  "
-        f"fa_y={fa_y}→{fa_y+fa_h}  en_y={en_y}→{en_y+en_h}  "
-        f"box=[{y1},{y2}] bg={bg}"
-    )
-    return {
-        "date_box": date_box,
-        "date_fa":  date_fa_raw,
-        "date_en":  date_en,
-        "fa_y": fa_y, "fa_h": fa_h, "fa_w": fa_w, "fa_size": fa_size,
-        "en_y": en_y, "en_h": en_h, "en_w": en_w, "en_size": en_size,
-        "bg":   bg,
-    }
-
-
-
-def _qc_date(currency: str, toronto_now: datetime, layout: dict) -> tuple[bool, list]:
-    """Validate that rendered date is today, inside the box, and non-overlapping."""
-    errors = []
-    x1, y1, x2, y2 = layout["date_box"]
-
-    expected_en = f"{toronto_now.day} {toronto_now.strftime('%B %Y')}"
-    if layout["date_en"] != expected_en:
-        errors.append(f"English date: got '{layout['date_en']}', expected '{expected_en}'")
-
-    if HAS_JDATE:
-        jd      = jdatetime.datetime.fromgregorian(datetime=toronto_now)
-        year_fa = str(jd.year).translate(str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹"))
-        if year_fa not in layout["date_fa"]:
-            errors.append(f"Persian year {year_fa} not found in '{layout['date_fa']}'")
-
-    if layout["fa_y"] < y1:
-        errors.append(f"Persian text above box (fa_y={layout['fa_y']} < {y1})")
-    if layout["en_y"] + layout["en_h"] > y2:
-        errors.append(f"English text below box ({layout['en_y'] + layout['en_h']} > {y2})")
-
-    if layout["fa_y"] + layout["fa_h"] > layout["en_y"]:
-        errors.append(
-            f"Overlap: Persian bottom={layout['fa_y'] + layout['fa_h']} "
-            f"> English top={layout['en_y']}"
-        )
-
-    if layout["fa_w"] < 20:
-        errors.append(f"Persian text too narrow (fa_w={layout['fa_w']})")
-    if layout["en_w"] < 20:
-        errors.append(f"English text too narrow (en_w={layout['en_w']})")
-
-    return len(errors) == 0, errors
+# ─── Date rendering — delegated to smart_text_engine ─────────────────────────
+# _draw_date_in_box and _qc_date replaced by smart_text_engine.
+# smart_text_engine.draw_date_box:
+#   - auto-sizes font to fill the box cleanly
+#   - 3 lines: Shamsi numeric / Persian weekday / Gregorian
+#   - proper RTL reshaping (arabic_reshaper + python-bidi)
+#   - centers text block horizontally and vertically inside the box
+#   - never guesses x/y coordinates
+# smart_text_engine.qc_date_fit: validates all 3 lines, overlap, boundary.
 
 
 def _save_qc_error(currency: str, errors: list, toronto_now: datetime):
@@ -392,12 +280,12 @@ def generate_single_poster(currency: str, cur_name_fa: str,
                                FONT_BOLD_EN, (255, 255, 255, 255))
         log.info(f"  [{currency}] BUY='{buy_str}'  box={box} font={fs}px bg={bg}")
 
-    # ── 2. Date — strictly inside date_box, calendar icon untouched ─────────
+    # ── 2. Date — smart fitting engine, strictly inside date_box ────────────
     date_box = coords.get("date_box")
     if date_box:
-        layout = _draw_date_in_box(draw, px_rgb, date_box, currency, toronto_now)
-
-        qc_ok, qc_errors = _qc_date(currency, toronto_now, layout)
+        layout = _smart_draw_date_box(img, date_box, currency, toronto_now, debug=False)
+        qc_ok, qc_errors, qc_score = _smart_qc_date(layout, date_box, toronto_now, currency)
+        log.info(f"[{currency}] Date QC score={qc_score:.0f}%")
         if not qc_ok:
             _save_qc_error(currency, qc_errors, toronto_now)
             return None
