@@ -345,9 +345,11 @@ def get_today_date_lines(dt: datetime) -> dict:
         "weekday":    weekday,
         "gregorian":  gregorian,
         "lines":      [shamsi, weekday, gregorian],
-        "font_paths": [FONT_BOLD_FA, FONT_BOLD_FA, FONT_BOLD_EN],
+        # Shamsi uses DejaVu: NotoNaskhArabic lacks the '/' glyph (renders as □).
+        # Persian digits (U+06F0–U+06F9) are in DejaVu; date reads L→R so no RTL needed.
+        "font_paths": [FONT_BOLD_EN, FONT_BOLD_FA, FONT_BOLD_EN],
         "colors":     [COLOR_FA, COLOR_FA, COLOR_EN],
-        "rtl_lines":  [True, True, False],
+        "rtl_lines":  [False, True, False],
     }
 
 
