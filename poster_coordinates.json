@@ -1,74 +1,64 @@
 {
-  "_note": "All boxes [x1, y1, x2, y2] = [left, top, right, bottom]. Coordinates verified via pixel-level brightness scanning and OCR. Calendar icon is OUTSIDE date_box. No writing outside these boxes.",
+  "_note": "Templates are 1448x1086. Coordinates verified via OCR on updated templates (2026-05-17). date_overlay replaces old date_box system — text rendered directly on header background, no rectangle drawn.",
   "CAD": {
-    "size": [1280, 960],
-    "date_box":  [400, 182, 727, 268],
-    "date_fa_cy": 200,
-    "date_en_cy": 236,
+    "size": [1448, 1086],
+    "date_overlay": [260, 195, 1080, 335],
     "sell_boxes": [
-      [462, 307, 752, 413],
-      [462, 421, 752, 510],
-      [462, 522, 752, 619]
+      [545, 342, 878, 422],
+      [545, 464, 878, 545],
+      [545, 585, 878, 666]
     ],
     "buy_boxes": [
-      [462, 630, 752, 727],
-      [462, 737, 752, 835]
+      [545, 706, 878, 787],
+      [545, 827, 878, 908]
     ],
-    "footer_box": [0, 858, 1280, 940]
+    "footer_box": [0, 972, 1448, 1055]
   },
   "USD": {
-    "size": [1280, 960],
-    "date_box":  [400, 182, 720, 258],
-    "date_fa_cy": 197,
-    "date_en_cy": 235,
+    "size": [1448, 1086],
+    "date_overlay": [260, 195, 1080, 335],
     "sell_boxes": [
-      [462, 307, 706, 393],
-      [462, 400, 706, 498],
-      [462, 505, 706, 603]
+      [503, 342, 852, 426],
+      [503, 464, 852, 549],
+      [503, 587, 852, 671]
     ],
     "buy_boxes": [
-      [462, 608, 706, 712],
-      [462, 724, 706, 820]
+      [503, 706, 852, 790],
+      [503, 826, 852, 910]
     ],
-    "footer_box": [0, 858, 1280, 940]
+    "footer_box": [0, 972, 1448, 1055]
   },
   "EUR": {
-    "size": [1280, 960],
-    "date_box":  [450, 207, 745, 293],
-    "date_fa_cy": 229,
-    "date_en_cy": 272,
+    "size": [1448, 1086],
+    "date_overlay": [260, 235, 1170, 372],
     "sell_boxes": [
-      [614, 338, 828, 522]
+      [684, 375, 972, 600]
     ],
     "buy_boxes": [
-      [614, 570, 828, 750]
+      [684, 638, 972, 862]
     ],
-    "footer_box": [0, 856, 1280, 928]
+    "footer_box": [0, 972, 1448, 1055]
   },
   "USDT": {
-    "size": [1280, 960],
-    "date_box":  [450, 208, 748, 286],
-    "date_fa_cy": 221,
-    "date_en_cy": 265,
+    "size": [1448, 1086],
+    "date_overlay": [260, 235, 1170, 370],
     "sell_boxes": [
-      [614, 338, 828, 516]
+      [684, 375, 972, 595]
     ],
     "buy_boxes": [
-      [614, 643, 828, 750]
+      [684, 645, 972, 870]
     ],
-    "footer_box": [0, 856, 1280, 928]
+    "footer_box": [0, 972, 1448, 1055]
   },
   "USACAN": {
-    "size": [1280, 960],
-    "date_box":  [453, 227, 775, 313],
-    "date_fa_cy": 248,
-    "date_en_cy": 289,
+    "size": [1448, 1086],
+    "date_overlay": [260, 245, 1170, 385],
     "sell_boxes": [
-      [614, 356, 843, 520]
+      [728, 385, 1012, 532]
     ],
     "buy_boxes": [
-      [614, 576, 843, 742]
+      [728, 700, 1012, 862]
     ],
-    "footer_box": [0, 856, 1280, 928]
+    "footer_box": [0, 972, 1448, 1055]
   }
 }

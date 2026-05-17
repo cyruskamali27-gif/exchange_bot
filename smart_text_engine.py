@@ -408,9 +408,9 @@ def draw_date_box(
         line_spacing=spacing,
         rtl_lines=date_data["rtl_lines"],
         shadow=True,
-        border_color=BOX_BORDER_CLR,
-        border_width=BOX_BORDER_W,
-        clean_bg=True,
+        border_color=None,
+        border_width=0,
+        clean_bg=False,
         block_offset=y_offset,
     )
 

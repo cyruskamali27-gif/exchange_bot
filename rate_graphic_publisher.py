@@ -6,7 +6,7 @@ Price Rules:
   - Cyrus SELL = Bahmani SELL  (exactly the same, no adjustment)
   - Cyrus BUY  = Bahmani BUY + 500 تومان
 
-Poster order: CAD → USD → EUR → USDT → USACAN
+Poster order: logo_daily → CAD → USD → USA/CAN → USDT → EUR
 Missing OCR data → poster still generated with --- placeholders.
 Only skipped if template file itself is missing.
 """
@@ -33,7 +33,16 @@ except ImportError:
     HAS_BIDI = False
     logging.warning("arabic-reshaper / python-bidi not installed")
 
-from smart_text_engine import draw_date_box as _smart_draw_date_box, qc_date_fit as _smart_qc_date
+from smart_text_engine import (
+    draw_date_box as _smart_draw_date_box,
+    qc_date_fit as _smart_qc_date,
+    fit_text_inside_box as _fit_text,
+    get_today_date_lines as _get_date_lines,
+)
+
+FONT_BOLD_FA = "/usr/share/fonts/truetype/noto/NotoNaskhArabic-Bold.ttf"
+COLOR_FA     = (242, 222, 148, 255)   # gold — Persian lines
+COLOR_EN     = (210, 190, 120, 255)   # slightly dimmer — Gregorian
 
 try:
     import jdatetime
@@ -73,6 +82,8 @@ TEMPLATES = {
     "USACAN": ASSETS_DIR / "updated_cyrus_exchange_usacan_poster.png",
 }
 
+LOGO_TEMPLATE = ASSETS_DIR / "logo.png"
+
 COORDS_FILE   = Path("/var/www/exchange_bot/poster_coordinates.json")
 QC_REPORT_DIR = Path("/var/www/exchange_bot/qc_reports")
 
@@ -84,12 +95,13 @@ def _load_coords() -> dict:
 
 POSTER_COORDS: dict = _load_coords()
 
+# logo_daily publishes first; currency posters follow in this order
 PUBLISH_ORDER = [
     ("CAD",    "دلار کانادا",  "Canada"),
     ("USD",    "دلار آمریکا", "USA"),
-    ("EUR",    "یورو",         "Europe"),
-    ("USDT",   "تتر (USDT)",   "USDT"),
     ("USACAN", "دلار آمریکا / کانادا", "USA/CAN"),
+    ("USDT",   "تتر (USDT)",   "USDT"),
+    ("EUR",    "یورو",         "Europe"),
 ]
 
 logging.basicConfig(
@@ -176,15 +188,50 @@ def _save_qc_error(currency: str, errors: list, toronto_now: datetime):
 
 # ─── Poster generator ─────────────────────────────────────────────────────────
 
+def _erase_price_digits(draw: ImageDraw.ImageDraw, px_rgb, box: list) -> tuple:
+    """
+    Erase old placeholder price digits from the template.
+    Samples the darkest (background) pixels in the box and fills the inner
+    text strip with that colour — preserving row borders and edge glow.
+    Returns the sampled background colour as (r, g, b).
+    """
+    x1, y1, x2, y2 = [int(v) for v in box]
+    pad_v = 3   # minimal inset — preserves row border/glow, clears all digit pixels
+    inner_y1 = y1 + pad_v
+    inner_y2 = y2 - pad_v
+    if inner_y2 <= inner_y1:
+        inner_y1, inner_y2 = y1, y2
+
+    samples = []
+    for sy in range(y1, y2, 3):
+        for sx in range(x1, x2, 8):
+            try:
+                r, g, b = px_rgb[sx, sy]
+                samples.append((r + g + b, r, g, b))
+            except Exception:
+                pass
+    if not samples:
+        return (10, 10, 20)
+    samples.sort()
+    dark = samples[: max(1, len(samples) // 3)]
+    bg = (
+        sum(s[1] for s in dark) // len(dark),
+        sum(s[2] for s in dark) // len(dark),
+        sum(s[3] for s in dark) // len(dark),
+    )
+    draw.rectangle([x1 + 3, inner_y1, x2 - 3, inner_y2], fill=(*bg, 255))
+    return bg
+
+
 def _write_in_box(draw, px_rgb, box: list, text: str, font_path: str,
                   text_color: tuple, max_font: int = 80, min_font: int = 14):
-    """Clear box, sample bg, center-write text. Shrinks font until text fits."""
+    """
+    Erase old template digits, then center-write new text inside box.
+    Preserves original poster texture — no large black rectangles.
+    """
     x1, y1, x2, y2 = box
     zone_w = x2 - x1
     zone_h = y2 - y1
-
-    bg = sample_zone_bg(px_rgb, y1, y2, x1, x2)
-    draw.rectangle([x1, y1, x2, y2], fill=(*bg, 255))
 
     font_size = min(max_font, max(min_font, int(zone_h * 0.60)))
     font      = load_font(font_path, font_size)
@@ -201,7 +248,11 @@ def _write_in_box(draw, px_rgb, box: list, text: str, font_path: str,
     tx = x1 + (zone_w - tw) // 2
     ty = y1 + (zone_h - th) // 2
 
-    draw.text((tx + 1, ty + 1), text, font=font, fill=(0, 0, 0, 150))
+    # Erase old template digits (tight inner strip, background-coloured)
+    bg = _erase_price_digits(draw, px_rgb, box)
+
+    # Subtle 1-px shadow + clean main text — no dark rectangle effect
+    draw.text((tx + 1, ty + 1), text, font=font, fill=(0, 0, 0, 90))
     draw.text((tx,     ty),     text, font=font, fill=text_color)
     return font_size, bg
 
@@ -280,15 +331,30 @@ def generate_single_poster(currency: str, cur_name_fa: str,
                                FONT_BOLD_EN, (255, 255, 255, 255))
         log.info(f"  [{currency}] BUY='{buy_str}'  box={box} font={fs}px bg={bg}")
 
-    # ── 2. Date — smart fitting engine, strictly inside date_box ────────────
-    date_box = coords.get("date_box")
-    if date_box:
-        layout = _smart_draw_date_box(img, date_box, currency, toronto_now, debug=False)
-        qc_ok, qc_errors, qc_score = _smart_qc_date(layout, date_box, toronto_now, currency)
-        log.info(f"[{currency}] Date QC score={qc_score:.0f}%")
-        if not qc_ok:
-            _save_qc_error(currency, qc_errors, toronto_now)
-            return None
+    # ── 2. Date — rendered as clean overlay in header area ──────────────────
+    date_overlay = coords.get("date_overlay")
+    if date_overlay:
+        date_data = _get_date_lines(toronto_now)
+        _fit_text(
+            img,
+            date_overlay,
+            date_data["lines"],
+            date_data["font_paths"],
+            date_data["colors"],
+            align="center",
+            vertical_align="center",
+            min_font_size=12,
+            max_font_size=52,
+            padding_x=24,
+            padding_y=8,
+            line_spacing=5,
+            rtl_lines=date_data["rtl_lines"],
+            shadow=True,
+            border_color=None,
+            border_width=0,
+            clean_bg=False,
+        )
+        log.info(f"[{currency}] Date overlay rendered in {date_overlay}")
 
     # ── 3. Save ────────────────────────────────────────────────────────────
     ts_str   = toronto_now.strftime("%Y-%m-%d-%H%M")
@@ -296,6 +362,92 @@ def generate_single_poster(currency: str, cur_name_fa: str,
     img.convert("RGB").save(str(out_path), "PNG")
     log.info(f"[{currency}] Saved → {out_path}")
     return out_path
+
+
+# ─── Logo daily poster ────────────────────────────────────────────────────────
+
+def generate_logo_daily(toronto_now: datetime) -> Path | None:
+    """
+    Generate the daily logo poster.
+    Writes the actual dates into the logo template's built-in date cells.
+    No dark gradient overlay, no black patch, no rectangles.
+    Published as the very first image in every posting cycle.
+    """
+    GENERATED_DIR.mkdir(parents=True, exist_ok=True)
+
+    if not LOGO_TEMPLATE.exists():
+        log.error(f"[logo_daily] Logo template missing: {LOGO_TEMPLATE}")
+        return None
+
+    try:
+        img = Image.open(LOGO_TEMPLATE).convert("RGBA")
+        w, h = img.size   # 1254×1254
+
+        date_data = _get_date_lines(toronto_now)
+
+        # ── Logo template has two built-in date cells (gold-bordered dark boxes)
+        # Row 1 right cell: "YYYY/MM/DD" placeholder → write Persian date
+        # Row 2 right cell: "DD/MM/YYYY" placeholder → write Gregorian date
+        # Cell positions measured from the 1254×1254 template via OCR.
+        shamsi_cell    = [637, 948, 960, 1058]   # right cell of Shamsi row
+        gregorian_cell = [637, 1058, 960, 1168]  # right cell of Gregorian row
+
+        # Shamsi row: weekday on top line, numeric Shamsi on second line
+        _fit_text(
+            img,
+            shamsi_cell,
+            [date_data["weekday"], date_data["shamsi"]],
+            [FONT_BOLD_FA, FONT_BOLD_FA],
+            [COLOR_FA, COLOR_FA],
+            align="center",
+            vertical_align="center",
+            min_font_size=14,
+            max_font_size=44,
+            padding_x=12,
+            padding_y=8,
+            line_spacing=4,
+            rtl_lines=[True, True],
+            shadow=True,
+            border_color=None,
+            border_width=0,
+            clean_bg=True,    # erase "YYYY/MM/DD" placeholder first
+        )
+
+        # Gregorian row: single line, English
+        _fit_text(
+            img,
+            gregorian_cell,
+            [date_data["gregorian"]],
+            [FONT_BOLD_EN],
+            [COLOR_EN],
+            align="center",
+            vertical_align="center",
+            min_font_size=14,
+            max_font_size=44,
+            padding_x=12,
+            padding_y=10,
+            line_spacing=0,
+            rtl_lines=[False],
+            shadow=True,
+            border_color=None,
+            border_width=0,
+            clean_bg=True,    # erase "DD/MM/YYYY" placeholder first
+        )
+
+        log.info(
+            f"[logo_daily] Date → '{date_data['weekday']}' / "
+            f"'{date_data['shamsi']}' / '{date_data['gregorian']}'"
+        )
+
+        ts_str   = toronto_now.strftime("%Y-%m-%d-%H%M")
+        out_path = GENERATED_DIR / f"{ts_str}-logo_daily.png"
+        img.convert("RGB").save(str(out_path), "PNG")
+        log.info(f"[logo_daily] Saved → {out_path}")
+        return out_path
+
+    except Exception as exc:
+        log.error(f"[logo_daily] Generation failed: {exc}", exc_info=True)
+        return None
 
 
 # ─── Rate extraction ──────────────────────────────────────────────────────────
@@ -659,10 +811,20 @@ async def scan_and_post(client: TelegramClient, force: bool = False):
         return
 
     reason = "forced" if force else "rates changed"
-    log.info(f"Generating {len(PUBLISH_ORDER)} posters ({reason})")
+    log.info(f"Generating logo_daily + {len(PUBLISH_ORDER)} posters ({reason})")
 
     posted_ids = []
     try:
+        # ── 0. Logo daily — always first ─────────────────────────────────────
+        logo_path = generate_logo_daily(toronto_now)
+        if logo_path:
+            logo_mid = post_to_channel(logo_path)
+            posted_ids.append(("logo_daily", logo_mid))
+            await asyncio.sleep(2)
+        else:
+            log.warning("[logo_daily] Generation failed — skipping logo post")
+
+        # ── 1-5. Currency rate posters ────────────────────────────────────────
         for cur_code, cur_name_fa, cur_name_en in PUBLISH_ORDER:
             prices = adjusted.get(cur_code, {})
             buy    = prices.get("buy")
@@ -683,7 +845,7 @@ async def scan_and_post(client: TelegramClient, force: bool = False):
 
         if posted_ids:
             save_rates(adjusted, toronto_now)
-            log.info(f"=== Posted {len(posted_ids)} poster(s) ===")
+            log.info(f"=== Posted {len(posted_ids)} image(s) ===")
             for cur, mid in posted_ids:
                 log.info(f"  {cur}: Telegram message_id={mid}")
         else:
