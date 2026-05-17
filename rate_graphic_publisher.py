@@ -392,12 +392,14 @@ def generate_logo_daily(toronto_now: datetime) -> Path | None:
         shamsi_cell    = [637, 948, 960, 1058]   # right cell of Shamsi row
         gregorian_cell = [637, 1058, 960, 1168]  # right cell of Gregorian row
 
-        # Shamsi row: weekday on top line, numeric Shamsi on second line
+        # Shamsi row: weekday on top line, numeric Shamsi on second line.
+        # Shamsi uses DejaVu (NotoNaskhArabic lacks '/') with rtl_lines=False
+        # since Persian date digits read left-to-right.
         _fit_text(
             img,
             shamsi_cell,
             [date_data["weekday"], date_data["shamsi"]],
-            [FONT_BOLD_FA, FONT_BOLD_FA],
+            [FONT_BOLD_FA, FONT_BOLD_EN],
             [COLOR_FA, COLOR_FA],
             align="center",
             vertical_align="center",
@@ -406,7 +408,7 @@ def generate_logo_daily(toronto_now: datetime) -> Path | None:
             padding_x=12,
             padding_y=8,
             line_spacing=4,
-            rtl_lines=[True, True],
+            rtl_lines=[True, False],
             shadow=True,
             border_color=None,
             border_width=0,
