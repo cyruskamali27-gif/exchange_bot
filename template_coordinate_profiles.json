@@ -1,0 +1,57 @@
+{
+  "_note": "Per-template date rendering profiles. date_strip=[x1,y1,x2,y2] covers only the empty gap between subtitle and first sell_box. max_font kept small so clean_bg fill stays narrow and natural-looking.",
+  "logo_daily": {
+    "shamsi_cell":    [637, 948,  960, 1058],
+    "gregorian_cell": [637, 1058, 960, 1168],
+    "max_font": 44,
+    "min_font": 14,
+    "padding_x": 12,
+    "padding_y": 8,
+    "line_spacing": 4
+  },
+  "CAD": {
+    "date_strip": [280, 265, 1080, 340],
+    "max_font": 22,
+    "min_font": 10,
+    "padding_x": 14,
+    "padding_y": 5,
+    "line_spacing": 3,
+    "clean_bg": true
+  },
+  "USD": {
+    "date_strip": [280, 260, 1080, 340],
+    "max_font": 22,
+    "min_font": 10,
+    "padding_x": 14,
+    "padding_y": 5,
+    "line_spacing": 3,
+    "clean_bg": true
+  },
+  "USACAN": {
+    "date_strip": [280, 305, 1080, 383],
+    "max_font": 22,
+    "min_font": 10,
+    "padding_x": 14,
+    "padding_y": 5,
+    "line_spacing": 3,
+    "clean_bg": true
+  },
+  "USDT": {
+    "date_strip": [280, 295, 1080, 370],
+    "max_font": 22,
+    "min_font": 10,
+    "padding_x": 14,
+    "padding_y": 5,
+    "line_spacing": 3,
+    "clean_bg": true
+  },
+  "EUR": {
+    "date_strip": [280, 295, 1080, 374],
+    "max_font": 22,
+    "min_font": 10,
+    "padding_x": 14,
+    "padding_y": 5,
+    "line_spacing": 3,
+    "clean_bg": true
+  }
+}

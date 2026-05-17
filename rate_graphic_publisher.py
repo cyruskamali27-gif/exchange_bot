@@ -84,8 +84,9 @@ TEMPLATES = {
 
 LOGO_TEMPLATE = ASSETS_DIR / "logo.png"
 
-COORDS_FILE   = Path("/var/www/exchange_bot/poster_coordinates.json")
-QC_REPORT_DIR = Path("/var/www/exchange_bot/qc_reports")
+COORDS_FILE    = Path("/var/www/exchange_bot/poster_coordinates.json")
+PROFILES_FILE  = Path("/var/www/exchange_bot/template_coordinate_profiles.json")
+QC_REPORT_DIR  = Path("/var/www/exchange_bot/qc_reports")
 
 def _load_coords() -> dict:
     try:
@@ -93,7 +94,14 @@ def _load_coords() -> dict:
     except Exception as exc:
         raise RuntimeError(f"Cannot load {COORDS_FILE}: {exc}")
 
-POSTER_COORDS: dict = _load_coords()
+def _load_profiles() -> dict:
+    try:
+        return json.loads(PROFILES_FILE.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise RuntimeError(f"Cannot load {PROFILES_FILE}: {exc}")
+
+POSTER_COORDS: dict   = _load_coords()
+DATE_PROFILES: dict   = _load_profiles()
 
 # logo_daily publishes first; currency posters follow in this order
 PUBLISH_ORDER = [
@@ -331,30 +339,31 @@ def generate_single_poster(currency: str, cur_name_fa: str,
                                FONT_BOLD_EN, (255, 255, 255, 255))
         log.info(f"  [{currency}] BUY='{buy_str}'  box={box} font={fs}px bg={bg}")
 
-    # ── 2. Date — rendered as clean overlay in header area ──────────────────
-    date_overlay = coords.get("date_overlay")
-    if date_overlay:
+    # ── 2. Date — compact header strip from per-template profile ───────────
+    prof = DATE_PROFILES.get(currency, {})
+    date_strip = prof.get("date_strip") or coords.get("date_overlay")
+    if date_strip:
         date_data = _get_date_lines(toronto_now)
         _fit_text(
             img,
-            date_overlay,
+            date_strip,
             date_data["lines"],
             date_data["font_paths"],
             date_data["colors"],
             align="center",
             vertical_align="center",
-            min_font_size=12,
-            max_font_size=52,
-            padding_x=24,
-            padding_y=10,
-            line_spacing=6,
+            min_font_size=prof.get("min_font", 10),
+            max_font_size=prof.get("max_font", 22),
+            padding_x=prof.get("padding_x", 14),
+            padding_y=prof.get("padding_y", 5),
+            line_spacing=prof.get("line_spacing", 3),
             rtl_lines=date_data["rtl_lines"],
             shadow=True,
             border_color=None,
             border_width=0,
-            clean_bg=True,
+            clean_bg=prof.get("clean_bg", True),
         )
-        log.info(f"[{currency}] Date overlay rendered in {date_overlay}")
+        log.info(f"[{currency}] Date strip rendered in {date_strip}")
 
     # ── 3. Save ────────────────────────────────────────────────────────────
     ts_str   = toronto_now.strftime("%Y-%m-%d-%H%M")
