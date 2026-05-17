@@ -142,8 +142,16 @@ def get_expected_prices(poster_type: str) -> dict:
     }
 
 
+def _restore_box(img: Image.Image, original: Image.Image, box: list, inset: int = 3):
+    """Paste original template pixels back into box interior — preserves gradients, glow, texture."""
+    x1, y1, x2, y2 = [int(v) for v in box]
+    region = original.crop((x1 + inset, y1 + inset, x2 - inset, y2 - inset))
+    img.paste(region, (x1 + inset, y1 + inset))
+
+
 def _erase_box(draw: ImageDraw.ImageDraw, px_rgb, box: list):
-    """Erase old placeholder digits by filling with sampled background colour."""
+    """Fallback: erase old placeholder digits by filling with sampled background colour.
+    Used only for AI-generated designs where no original template is available."""
     x1, y1, x2, y2 = [int(v) for v in box]
     samples = []
     for sy in range(y1, y2, 3):

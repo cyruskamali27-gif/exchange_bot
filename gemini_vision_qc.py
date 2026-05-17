@@ -75,13 +75,15 @@ def _build_prompt(poster_type: str, expected: dict) -> str:
             "You are a financial poster QC inspector for Cyrus Global Exchange.\n"
             "This is a LOGO/DATE poster (no prices).\n\n"
             "CHECK:\n"
-            "1. Is the Cyrus Global Exchange logo visible?\n"
-            "2. Are there date display boxes visible (even if empty)?\n"
-            "3. Does the poster look professional and undamaged?\n"
-            "4. Is there any unwanted text or visual artifacts?\n\n"
+            "1. logo_ok          — Cyrus Global Exchange logo is fully visible and NOT cropped at any edge\n"
+            "2. date_boxes_ok    — Date boxes are visible inside the logo panel area\n"
+            "3. date_inside_logo — Date text appears ONLY inside the logo/date panel, NOT floating elsewhere\n"
+            "4. no_black_date_box — No separate black or dark rectangle box exists around the date\n"
+            "5. professional     — Poster looks professional and design is not damaged\n\n"
             f"Today's date for reference: {today_str}\n\n"
             'Respond ONLY in JSON:\n'
             '{"passed": true/false, "logo_ok": true/false, "date_boxes_ok": true/false, '
+            '"date_inside_logo": true/false, "no_black_date_box": true/false, '
             '"professional": true/false, "issues": [], "score": 0-100, '
             '"recommendation": "APPROVE or REJECT", "notes": "brief"}'
         )
@@ -99,18 +101,31 @@ EXPECTED VALUES (calculated by our Python system from live rates):
   Buy price:  {buy_str}
   Today's date (Gregorian): {today_str}
 
+POSTER LAYOUT RULES YOU MUST ENFORCE:
+- The poster has a HEADER/LOGO BAND at the top (~top 30% of the image). Date text belongs ONLY there.
+- The MAIN ARTWORK area below the header contains price boxes with exchange rate numbers.
+- NO date box, sticker, rectangle, or overlay should appear over the main artwork.
+- Price numbers should appear clean inside their designated boxes with NO colored background patch behind them.
+
 INSPECT each of the following and answer true/false:
 
-1. sell_price_ok    — Sell price number is visible and matches "{sell_str}"
-2. buy_price_ok     — Buy price number is visible and matches "{buy_str}"
-3. prices_in_boxes  — Both prices appear inside proper rectangular price boxes
-4. no_floating      — No price text is floating outside a box
-5. date_ok          — A date is visible and appears to be today or recent
-6. persian_ok       — Persian/Arabic text is visible and not broken/garbled
-7. professional     — Poster looks professional and design is not damaged
-8. no_sticker       — No ugly patch, rectangle, or sticker effect behind prices
-9. no_invented_nums — No unexpected numbers other than the expected prices
-10. branding_ok     — Cyrus Global Exchange name or logo is visible
+REGULAR CHECKS:
+1. sell_price_ok      — Sell price number is visible and matches "{sell_str}"
+2. buy_price_ok       — Buy price number is visible and matches "{buy_str}"
+3. prices_in_boxes    — Both prices appear inside proper rectangular price boxes
+4. no_floating        — No price text is floating outside a box
+5. date_ok            — A date is visible and appears to be today or recent
+6. persian_ok         — Persian/Arabic text is visible and not broken/garbled
+7. professional       — Poster looks professional and design is not damaged
+9. no_invented_nums   — No unexpected numbers other than the expected prices
+
+HARD FAIL CHECKS (false = automatic REJECT regardless of score):
+8.  no_sticker        — No patch, rectangle, or sticker-effect background behind price numbers
+10. no_black_date_box — No separate black or dark-colored rectangle/box exists in the date area
+11. date_inside_logo  — Date text is ONLY in the header/logo band (top area), NOT over price boxes or main artwork
+12. no_overlapping_text — No text elements overlap each other (prices, labels, dates all separate)
+13. logo_not_cropped  — The Cyrus Global Exchange logo/branding is fully visible and NOT cut off at any edge
+14. branding_ok       — Cyrus Global Exchange name or logo is visible
 
 Respond ONLY in this exact JSON format (no extra text):
 {{
@@ -124,6 +139,10 @@ Respond ONLY in this exact JSON format (no extra text):
   "professional": true or false,
   "no_sticker": true or false,
   "no_invented_nums": true or false,
+  "no_black_date_box": true or false,
+  "date_inside_logo": true or false,
+  "no_overlapping_text": true or false,
+  "logo_not_cropped": true or false,
   "branding_ok": true or false,
   "issues": ["list any specific issues found, empty array if none"],
   "score": 0,
@@ -201,7 +220,8 @@ def run_qc(poster_type: str, rendered_path: Path) -> dict:
     check_keys = [
         "sell_price_ok", "buy_price_ok", "prices_in_boxes", "no_floating",
         "date_ok", "persian_ok", "professional", "no_sticker",
-        "no_invented_nums", "branding_ok",
+        "no_invented_nums", "branding_ok", "no_black_date_box",
+        "date_inside_logo", "no_overlapping_text", "logo_not_cropped",
     ]
     checks_present = [k for k in check_keys if k in report]
     if checks_present:
@@ -214,6 +234,17 @@ def run_qc(poster_type: str, rendered_path: Path) -> dict:
             report.get("score", 0) >= 75
             and report.get("recommendation", "REJECT") == "APPROVE"
         )
+
+    # Hard fail conditions — instant REJECT regardless of overall score
+    HARD_FAIL_KEYS = ["no_black_date_box", "date_inside_logo", "no_sticker", "logo_not_cropped"]
+    hard_failed = [k for k in HARD_FAIL_KEYS if k in report and not report.get(k)]
+    if hard_failed:
+        report["passed"] = False
+        report["recommendation"] = "REJECT"
+        if "issues" not in report:
+            report["issues"] = []
+        for k in hard_failed:
+            report["issues"].insert(0, f"HARD FAIL: {k}")
 
     # Attach metadata
     report["poster_type"]   = key
