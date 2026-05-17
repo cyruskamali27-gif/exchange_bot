@@ -129,6 +129,7 @@ def fit_text_inside_box(
     border_width: int = BOX_BORDER_W,
     clean_bg: bool = True,
     block_offset: int = 0,
+    stroke_width: int = 0,
 ) -> dict:
     """
     Fit multi-line text inside a box with automatic font-size reduction.
@@ -253,7 +254,7 @@ def fit_text_inside_box(
 
     block_bottom = y_cursor - spacing
 
-    # ── Clean background — sample region, fill interior ───────────────────────
+    # ── Clean background — fill ONLY behind the text block (tight) ───────────
     if clean_bg:
         px_rgb = image.convert("RGB").load()
         bg     = _sample_bg(px_rgb, x1, y1, x2, y2)
@@ -262,10 +263,13 @@ def fit_text_inside_box(
             max(0, bg[1] - BG_DARKEN),
             max(0, bg[2] - 10),
         )
-        # Fill interior only — preserve original template border pixels (inset by 2)
         bw = border_width if border_color else 0
+        # Tight fill: only cover the actual text block area, not the full zone
+        _pad    = 4
+        fill_y1 = max(y1 + bw, block_top - _pad)
+        fill_y2 = min(y2 - bw, block_bottom + _pad)
         draw.rectangle(
-            [x1 + bw, y1 + bw, x2 - bw, y2 - bw],
+            [x1 + bw, fill_y1, x2 - bw, fill_y2],
             fill=(*box_bg, 255),
         )
 
@@ -273,15 +277,19 @@ def fit_text_inside_box(
     if border_color:
         draw.rectangle([x1, y1, x2, y2], outline=border_color, width=border_width)
 
-    # ── Draw text with optional shadow ────────────────────────────────────────
+    # ── Draw text with optional stroke or shadow ───────────────────────────────
     for i in range(n):
         lx, ly = positions[i]
         txt    = display_texts[i]
         fnt    = fonts[i]
         col    = colors[i]
-        if shadow:
-            draw.text((lx + 1, ly + 1), txt, font=fnt, fill=SHADOW_CLR)
-        draw.text((lx, ly), txt, font=fnt, fill=col)
+        if stroke_width > 0:
+            draw.text((lx, ly), txt, font=fnt, fill=col,
+                      stroke_width=stroke_width, stroke_fill=(0, 0, 0, 220))
+        else:
+            if shadow:
+                draw.text((lx + 1, ly + 1), txt, font=fnt, fill=SHADOW_CLR)
+            draw.text((lx, ly), txt, font=fnt, fill=col)
 
     # ── QC fit check ──────────────────────────────────────────────────────────
     overlap_ok = all(
