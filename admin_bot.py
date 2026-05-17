@@ -694,6 +694,19 @@ def main():
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     register_design_handlers(app)
+
+    # ── Poster Pipeline commands (same bot, avoids token conflict) ────────────
+    from poster_pipeline import (
+        cmd_poster_pipeline, cmd_ai_design_poster, cmd_render_prices,
+        cmd_vision_qc, cmd_publish_approved, cmd_pipeline_status,
+    )
+    app.add_handler(CommandHandler("poster_pipeline",  cmd_poster_pipeline))
+    app.add_handler(CommandHandler("ai_design_poster", cmd_ai_design_poster))
+    app.add_handler(CommandHandler("render_prices",    cmd_render_prices))
+    app.add_handler(CommandHandler("vision_qc",        cmd_vision_qc))
+    app.add_handler(CommandHandler("publish_approved", cmd_publish_approved))
+    app.add_handler(CommandHandler("pipeline_status",  cmd_pipeline_status))
+
     print("🚀 پنل مدیریت شروع شد...")
     app.run_polling()
 
