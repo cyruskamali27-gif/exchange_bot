@@ -119,7 +119,8 @@ def get_expected_prices(poster_type: str) -> dict:
 
     if sell_raw is not None:
         sell_val = float(sell_raw)
-        buy_val  = float(buy_raw) + BUY_ADJ if buy_raw is not None else None
+        adj      = 0 if fmt == "decimal" else BUY_ADJ   # BUY_ADJ is in Toman, not for FX ratios
+        buy_val  = float(buy_raw) + adj if buy_raw is not None else None
     else:
         sell_val = buy_val = None
 
