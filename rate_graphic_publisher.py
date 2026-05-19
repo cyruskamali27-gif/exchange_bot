@@ -146,12 +146,9 @@ def erase_and_write(
         sum(p[2] for p in dark) // len(dark),
     )
 
-    # Step 3 — paint only border strip to hide pink markers; leave interior natural
+    # Step 3 — fill entire box: covers pink markers AND erases baked-in placeholder text
     draw = ImageDraw.Draw(working)
-    draw.rectangle([x1,              y1, x2,              y1 + BORDER], fill=(*bg, 255))
-    draw.rectangle([x1,  y2 - BORDER, x2,              y2            ], fill=(*bg, 255))
-    draw.rectangle([x1,              y1, x1 + BORDER,   y2            ], fill=(*bg, 255))
-    draw.rectangle([x2 - BORDER,     y1, x2,              y2            ], fill=(*bg, 255))
+    draw.rectangle([x1, y1, x2, y2], fill=(*bg, 255))
 
     # Step 4 — draw text centered (skip if empty)
     if not text:
@@ -171,7 +168,6 @@ def erase_and_write(
     tx = x1 + (bw - tw) // 2
     ty = y1 + (bh - th) // 2
 
-    draw.text((tx + 1, ty + 1), text, font=font, fill=(0, 0, 0, 120))
     draw.text((tx, ty),          text, font=font, fill=color)
     return font_size
 
