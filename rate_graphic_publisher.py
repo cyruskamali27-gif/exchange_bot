@@ -135,15 +135,15 @@ def erase_and_write(
     master_roi = master.crop((x1, y1, x2, y2))
     working.paste(master_roi, (x1, y1))
 
-    # Step 2 — sample bg from interior (away from 4px pink markers)
+    # Step 2 — sample bg from interior: average of non-bright pixels
+    # (excludes baked-in white placeholder text; gives the true cell background color)
     interior_roi = master.crop((x1 + BORDER, y1 + BORDER, x2 - BORDER, y2 - BORDER))
-    pixels = sorted(interior_roi.convert("RGB").getdata(),
-                    key=lambda p: p[0] + p[1] + p[2])
-    dark = pixels[: max(1, len(pixels) // 3)]
+    all_px = list(interior_roi.convert("RGB").getdata())
+    bg_px = [p for p in all_px if p[0] + p[1] + p[2] < 600] or all_px
     bg = (
-        sum(p[0] for p in dark) // len(dark),
-        sum(p[1] for p in dark) // len(dark),
-        sum(p[2] for p in dark) // len(dark),
+        sum(p[0] for p in bg_px) // len(bg_px),
+        sum(p[1] for p in bg_px) // len(bg_px),
+        sum(p[2] for p in bg_px) // len(bg_px),
     )
 
     # Step 3 — fill entire box: covers pink markers AND erases baked-in placeholder text
@@ -474,17 +474,15 @@ async def scan_and_post(
     if not adjusted:
         adjusted = load_rates_from_files()
 
-    # Derive USACAN and EUR if not already present
-    if not adjusted.get("USACAN", {}).get("sell"):
-        usacan = _derive_usacan(adjusted)
-        if usacan:
-            adjusted["USACAN"] = usacan
-            log.info(f"  [USACAN] derived sell={usacan['sell']} buy={usacan.get('buy')}")
+    # Always re-derive USACAN and EUR — they are ratios, never stored reliably
+    usacan = _derive_usacan(adjusted)
+    if usacan:
+        adjusted["USACAN"] = usacan
+        log.info(f"  [USACAN] derived sell={usacan['sell']} buy={usacan.get('buy')}")
 
-    if not adjusted.get("EUR", {}).get("sell"):
-        eur = _derive_eur(adjusted)
-        if eur:
-            adjusted.setdefault("EUR", {}).update(eur)
+    eur = _derive_eur(adjusted)
+    if eur:
+        adjusted["EUR"] = eur
 
     if not adjusted:
         log.warning("No rate data — skipping post")
