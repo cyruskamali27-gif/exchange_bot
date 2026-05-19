@@ -119,55 +119,35 @@ def erase_and_write(
     max_font:  int = 80,
     min_font:  int = 14,
 ) -> int:
-    """
-    1. Restore master region (removes any previous render).
-    2. Sample bg from box interior (inside the 4px pink marker border).
-    3. Paint only the 5px border strip to hide pink markers — interior stays natural.
-    4. Draw new `text` centered. If text is empty, skip drawing (blank area).
-    Returns the font size used (0 if text is empty).
-    """
     x1, y1, x2, y2 = [int(v) for v in box]
     bw = x2 - x1
     bh = y2 - y1
-    BORDER = 2  # small inset for bg sampling (no pink markers on clean templates)
 
-    # Step 1 — restore clean master region
+    # Restore exact master background (removes any previous render)
     master_roi = master.crop((x1, y1, x2, y2))
     working.paste(master_roi, (x1, y1))
 
-    # Step 2 — sample bg: average of non-bright interior pixels
-    # (excludes baked-in white placeholder text; gives true cell background color)
-    interior_roi = master.crop((x1 + BORDER, y1 + BORDER, x2 - BORDER, y2 - BORDER))
-    all_px = list(interior_roi.convert("RGB").getdata())
-    bg_px = [p for p in all_px if p[0] + p[1] + p[2] < 600] or all_px
-    bg = (
-        sum(p[0] for p in bg_px) // len(bg_px),
-        sum(p[1] for p in bg_px) // len(bg_px),
-        sum(p[2] for p in bg_px) // len(bg_px),
-    )
-
-    # Step 3 — fill box to erase baked-in placeholder text
-    draw = ImageDraw.Draw(working)
-    draw.rectangle([x1, y1, x2, y2], fill=(*bg, 255))
-
+    # Skip drawing if empty
     if not text:
         return 0
 
+    # Find best font size
     font_size = min(max_font, max(min_font, int(bh * 0.60)))
-    font      = load_font(font_path, font_size)
-    bb        = draw.textbbox((0, 0), text, font=font)
-    tw, th    = bb[2] - bb[0], bb[3] - bb[1]
+    draw = ImageDraw.Draw(working)
+    font = load_font(font_path, font_size)
+    bb = draw.textbbox((0, 0), text, font=font)
+    tw, th = bb[2] - bb[0], bb[3] - bb[1]
 
-    while tw > bw - 16 and font_size > min_font:
+    while tw > bw - 8 and font_size > min_font:
         font_size -= 2
-        font      = load_font(font_path, font_size)
-        bb        = draw.textbbox((0, 0), text, font=font)
-        tw, th    = bb[2] - bb[0], bb[3] - bb[1]
+        font = load_font(font_path, font_size)
+        bb = draw.textbbox((0, 0), text, font=font)
+        tw, th = bb[2] - bb[0], bb[3] - bb[1]
 
     tx = x1 + (bw - tw) // 2
     ty = y1 + (bh - th) // 2
 
-    draw.text((tx, ty),          text, font=font, fill=color)
+    draw.text((tx, ty), text, font=font, fill=color)
     return font_size
 
 # ─── Date helpers (logo only) ──────────────────────────────────────────────────
