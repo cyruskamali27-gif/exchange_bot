@@ -36,7 +36,7 @@ except ImportError:
 from config import TELETHON_API_ID, TELETHON_API_HASH, TELETHON_PHONE, BOT_TOKEN
 
 # ─── Paths ─────────────────────────────────────────────────────────────────────
-TEMPLATES_DIR = Path("/var/www/exchange_bot/templates_marker")
+TEMPLATES_DIR = Path("/var/www/exchange_bot/templates")
 COORDS_FILE   = Path("/var/www/exchange_bot/poster_coordinates.json")
 RATES_FILE    = Path("/var/www/exchange_bot/latest_rates.json")
 CACHE_FILE    = Path("/var/www/exchange_bot/current_price.json")
@@ -129,14 +129,14 @@ def erase_and_write(
     x1, y1, x2, y2 = [int(v) for v in box]
     bw = x2 - x1
     bh = y2 - y1
-    BORDER = 5  # covers 4px pink markers + 1px margin
+    BORDER = 2  # small inset for bg sampling (no pink markers on clean templates)
 
     # Step 1 — restore clean master region
     master_roi = master.crop((x1, y1, x2, y2))
     working.paste(master_roi, (x1, y1))
 
-    # Step 2 — sample bg from interior: average of non-bright pixels
-    # (excludes baked-in white placeholder text; gives the true cell background color)
+    # Step 2 — sample bg: average of non-bright interior pixels
+    # (excludes baked-in white placeholder text; gives true cell background color)
     interior_roi = master.crop((x1 + BORDER, y1 + BORDER, x2 - BORDER, y2 - BORDER))
     all_px = list(interior_roi.convert("RGB").getdata())
     bg_px = [p for p in all_px if p[0] + p[1] + p[2] < 600] or all_px
@@ -146,11 +146,10 @@ def erase_and_write(
         sum(p[2] for p in bg_px) // len(bg_px),
     )
 
-    # Step 3 — fill entire box: covers pink markers AND erases baked-in placeholder text
+    # Step 3 — fill box to erase baked-in placeholder text
     draw = ImageDraw.Draw(working)
     draw.rectangle([x1, y1, x2, y2], fill=(*bg, 255))
 
-    # Step 4 — draw text centered (skip if empty)
     if not text:
         return 0
 
