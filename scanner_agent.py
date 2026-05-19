@@ -20,8 +20,6 @@ from voice_agent import voice_to_text, send_convai_audio
 import elevenlabs_agent
 from natural_replies import get_reply
 from agent_memory import log_conversation, detect_customer_tone
-import conversation_qc_agent as _qc
-from qc_command_router import register_qc_handlers
 
 log = logging.getLogger("scanner")
 logging.basicConfig(level=logging.INFO)
@@ -312,8 +310,6 @@ async def run():
         log.error("[GUARD] FATAL: could not resolve %s: %s — bot will not send to any group",
                   ALLOWED_TELEGRAM_CHAT, e)
         telegram_guard.init(-1, ADMIN_ID)
-
-    await register_qc_handlers(client)
 
     if TEST_GROUP_ONLY:
         print(f"⚠️  TEST_GROUP_ONLY=true — گروه تست ({TEST_GROUP_ID}) فعال است")

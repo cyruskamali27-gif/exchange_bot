@@ -142,17 +142,13 @@ def erase_and_write(
         sum(p[2] for p in dark) // len(dark),
     )
 
-    # Step 2 — restore master region (brings pink border back)
+    # Step 2 — restore master region then fill entire box with sampled background
+    # This also covers the pink coordinate-detection markers so they never appear in output
     working.paste(master_roi, (x1, y1))
-
-    # Step 3 — erase old placeholder text with solid background fill
     draw = ImageDraw.Draw(working)
-    draw.rectangle(
-        [x1 + INSET, y1 + INSET, x2 - INSET, y2 - INSET],
-        fill=(*bg, 255),
-    )
+    draw.rectangle([x1, y1, x2, y2], fill=(*bg, 255))
 
-    # Step 4 — size font and draw new text centered
+    # Step 3 — draw new text centered
     font_size = min(max_font, max(min_font, int(bh * 0.60)))
     font      = load_font(font_path, font_size)
     bb        = draw.textbbox((0, 0), text, font=font)

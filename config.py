@@ -44,6 +44,13 @@ USD_CAD_OPEN_HOUR    = int(os.environ.get("USD_CAD_OPEN_HOUR",  "9"))
 USD_CAD_CLOSE_HOUR   = int(os.environ.get("USD_CAD_CLOSE_HOUR", "17"))
 
 
+# ─── Channel routing ─────────────────────────────────────────────
+# QA_CHANNEL_ID  : test/debug/iteration output — NEVER public
+# MAIN_CHANNEL_ID: final approved posters only
+_qa_raw         = os.environ.get("QA_CHANNEL_ID", str(ADMIN_ID))
+QA_CHANNEL_ID   = int(_qa_raw) if _qa_raw.lstrip("-").isdigit() else _qa_raw
+MAIN_CHANNEL_ID = os.environ.get("MAIN_CHANNEL_ID", "@cyrusGlobalExchange")
+
 # ─── Safe / test mode ────────────────────────────────────────────
 SAFE_MODE        = os.environ.get("SAFE_MODE", "false").lower() == "true"
 TEST_GROUP_ONLY  = os.environ.get("TEST_GROUP_ONLY", "false").lower() == "true"

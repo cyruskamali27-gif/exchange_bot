@@ -539,12 +539,6 @@ async def process(uid: int, text: str, sender_name: str = "",
     # Strip ElevenLabs stage-direction brackets
     reply = re.sub(r'^\s*\[[^\]]*\]\s*', '', reply).strip()
 
-    # ── QC: inspect and possibly rewrite before sending ──────────────────────
-    try:
-        from conversation_qc_agent import inspect_reply as _qc_inspect
-        reply = await _qc_inspect(uid, reply)
-    except Exception as _qc_err:
-        log.warning("[BRAIN] QC error (reply sent as-is): %s", _qc_err)
 
     # Notify admin on confirmed deal
     if "[CONFIRMED]" in reply or "CONFIRMED" in reply:
