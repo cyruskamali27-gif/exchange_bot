@@ -127,13 +127,25 @@ def erase_and_write(
     master_roi = master.crop((x1, y1, x2, y2))
     working.paste(master_roi, (x1, y1))
 
+    # Sample bg: average of non-bright interior pixels (excludes baked-in white text)
+    all_px = list(master_roi.convert("RGB").getdata())
+    bg_px = [p for p in all_px if p[0] + p[1] + p[2] < 600] or all_px
+    bg = (
+        sum(p[0] for p in bg_px) // len(bg_px),
+        sum(p[1] for p in bg_px) // len(bg_px),
+        sum(p[2] for p in bg_px) // len(bg_px),
+    )
+
+    # Fill box to erase baked-in placeholder text
+    draw = ImageDraw.Draw(working)
+    draw.rectangle([x1, y1, x2, y2], fill=(*bg, 255))
+
     # Skip drawing if empty
     if not text:
         return 0
 
     # Find best font size
     font_size = min(max_font, max(min_font, int(bh * 0.60)))
-    draw = ImageDraw.Draw(working)
     font = load_font(font_path, font_size)
     bb = draw.textbbox((0, 0), text, font=font)
     tw, th = bb[2] - bb[0], bb[3] - bb[1]
