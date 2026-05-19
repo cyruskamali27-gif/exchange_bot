@@ -53,7 +53,7 @@ BUY_ADJ       = int(os.environ.get("PUBLISHER_BUY_ADJ", "500"))
 
 # ─── Fonts ─────────────────────────────────────────────────────────────────────
 FONT_EN = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-FONT_FA = "/usr/share/fonts/truetype/noto/NotoNaskhArabic-Bold.ttf"
+FONT_FA = "/usr/share/fonts/truetype/vazirmatn/Vazirmatn-Bold.ttf"
 
 # ─── Template file map ─────────────────────────────────────────────────────────
 # Source templates (templates_marker/) and output filenames (final/) share the same basename.
@@ -120,35 +120,43 @@ def erase_and_write(
     min_font:  int = 14,
 ) -> int:
     """
-    1. Sample background color from the clean master (darkest pixels = interior bg).
-    2. Paste master region back — restores the pink border correctly.
-    3. Flood-fill the interior (inset 5px) with sampled background — erases old text.
-    4. Draw new `text` centered inside the box.
-    Returns the font size used.
+    1. Restore master region (removes any previous render).
+    2. Sample bg from box interior (inside the 4px pink marker border).
+    3. Paint only the 5px border strip to hide pink markers — interior stays natural.
+    4. Draw new `text` centered. If text is empty, skip drawing (blank area).
+    Returns the font size used (0 if text is empty).
     """
     x1, y1, x2, y2 = [int(v) for v in box]
     bw = x2 - x1
     bh = y2 - y1
-    INSET = 5
+    BORDER = 5  # covers 4px pink markers + 1px margin
 
-    # Step 1 — sample background: take darkest 33% of pixels from the master box
+    # Step 1 — restore clean master region
     master_roi = master.crop((x1, y1, x2, y2))
-    pixels     = sorted(master_roi.convert("RGB").getdata(),
-                        key=lambda p: p[0] + p[1] + p[2])
+    working.paste(master_roi, (x1, y1))
+
+    # Step 2 — sample bg from interior (away from 4px pink markers)
+    interior_roi = master.crop((x1 + BORDER, y1 + BORDER, x2 - BORDER, y2 - BORDER))
+    pixels = sorted(interior_roi.convert("RGB").getdata(),
+                    key=lambda p: p[0] + p[1] + p[2])
     dark = pixels[: max(1, len(pixels) // 3)]
-    bg   = (
+    bg = (
         sum(p[0] for p in dark) // len(dark),
         sum(p[1] for p in dark) // len(dark),
         sum(p[2] for p in dark) // len(dark),
     )
 
-    # Step 2 — restore master region then fill entire box with sampled background
-    # This also covers the pink coordinate-detection markers so they never appear in output
-    working.paste(master_roi, (x1, y1))
+    # Step 3 — paint only border strip to hide pink markers; leave interior natural
     draw = ImageDraw.Draw(working)
-    draw.rectangle([x1, y1, x2, y2], fill=(*bg, 255))
+    draw.rectangle([x1,              y1, x2,              y1 + BORDER], fill=(*bg, 255))
+    draw.rectangle([x1,  y2 - BORDER, x2,              y2            ], fill=(*bg, 255))
+    draw.rectangle([x1,              y1, x1 + BORDER,   y2            ], fill=(*bg, 255))
+    draw.rectangle([x2 - BORDER,     y1, x2,              y2            ], fill=(*bg, 255))
 
-    # Step 3 — draw new text centered
+    # Step 4 — draw text centered (skip if empty)
+    if not text:
+        return 0
+
     font_size = min(max_font, max(min_font, int(bh * 0.60)))
     font      = load_font(font_path, font_size)
     bb        = draw.textbbox((0, 0), text, font=font)
@@ -156,9 +164,9 @@ def erase_and_write(
 
     while tw > bw - 16 and font_size > min_font:
         font_size -= 2
-        font  = load_font(font_path, font_size)
-        bb    = draw.textbbox((0, 0), text, font=font)
-        tw, th = bb[2] - bb[0], bb[3] - bb[1]
+        font      = load_font(font_path, font_size)
+        bb        = draw.textbbox((0, 0), text, font=font)
+        tw, th    = bb[2] - bb[0], bb[3] - bb[1]
 
     tx = x1 + (bw - tw) // 2
     ty = y1 + (bh - th) // 2
@@ -255,11 +263,11 @@ def generate_currency_poster(
     working = master.copy()
 
     if currency in ("USACAN", "EUR"):
-        sell_str = f"{sell:.2f}" if sell is not None else "---"
-        buy_str  = f"{buy:.2f}"  if buy  is not None else "---"
+        sell_str = f"{sell:.2f}" if sell is not None else ""
+        buy_str  = f"{buy:.2f}"  if buy  is not None else ""
     else:
-        sell_str = f"{int(sell):,}" if sell is not None else "---"
-        buy_str  = f"{int(buy):,}"  if buy  is not None else "---"
+        sell_str = f"{int(sell):,}" if sell is not None else ""
+        buy_str  = f"{int(buy):,}"  if buy  is not None else ""
 
     WHITE = (255, 255, 255, 255)
 
