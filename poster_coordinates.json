@@ -1,68 +1,146 @@
 {
-  "_note": "CAD=1448x1086; USD/USACAN=1280x1024; EUR/USDT=1280x960. date_overlay uses clean_bg=True — erases stars/placeholders before writing date. Y bounds start AFTER the Persian title and end just before the first sell_box. Coordinates locked — do not adjust dynamically.",
   "CAD": {
-    "size": [1448, 1086],
-    "date_overlay": [260, 215, 1080, 340],
     "sell_boxes": [
-      [545, 342, 878, 422],
-      [545, 464, 878, 545],
-      [545, 585, 878, 666]
+      [
+        505,
+        355,
+        795,
+        429
+      ],
+      [
+        505,
+        470,
+        795,
+        544
+      ],
+      [
+        505,
+        585,
+        795,
+        659
+      ]
     ],
     "sell_keys": ["sell", "sell_cheque", "sell_etransfer"],
     "buy_boxes": [
-      [545, 706, 878, 787],
-      [545, 827, 878, 908]
+      [
+        505,
+        700,
+        795,
+        774
+      ],
+      [
+        505,
+        815,
+        795,
+        889
+      ]
     ],
-    "buy_keys": ["buy", "buy_direct"],
-    "footer_box": [0, 972, 1448, 1055]
+    "buy_keys": ["buy", "buy_direct"]
   },
   "USD": {
-    "size": [1280, 1024],
-    "date_overlay": [260, 195, 1080, 340],
     "sell_boxes": [
-      [503, 342, 852, 426],
-      [503, 464, 852, 549],
-      [503, 587, 852, 671]
+      [
+        480,
+        360,
+        790,
+        438
+      ],
+      [
+        480,
+        490,
+        790,
+        568
+      ],
+      [
+        480,
+        620,
+        790,
+        698
+      ]
     ],
     "sell_keys": ["sell", "sell_inside_usa", "sell_etransfer"],
     "buy_boxes": [
-      [503, 706, 852, 790],
-      [503, 826, 852, 910]
+      [
+        480,
+        750,
+        790,
+        828
+      ],
+      [
+        480,
+        880,
+        790,
+        958
+      ]
     ],
-    "buy_keys": ["buy", "buy_direct"],
-    "footer_box": [0, 972, 1448, 1055]
-  },
-  "EUR": {
-    "size": [1280, 960],
-    "date_overlay": [260, 205, 1100, 373],
-    "sell_boxes": [
-      [684, 375, 972, 600]
-    ],
-    "buy_boxes": [
-      [684, 638, 972, 862]
-    ],
-    "footer_box": [0, 972, 1448, 1055]
-  },
-  "USDT": {
-    "size": [1280, 960],
-    "date_overlay": [260, 162, 1100, 370],
-    "sell_boxes": [
-      [684, 375, 972, 595]
-    ],
-    "buy_boxes": [
-      [684, 645, 972, 870]
-    ],
-    "footer_box": [0, 972, 1448, 1055]
+    "buy_keys": ["buy", "buy_direct"]
   },
   "USACAN": {
-    "size": [1280, 1024],
-    "date_overlay": [260, 167, 1100, 385],
     "sell_boxes": [
-      [728, 385, 1012, 532]
+      [
+        620,
+        430,
+        830,
+        525
+      ]
     ],
     "buy_boxes": [
-      [728, 620, 1012, 760]
+      [
+        620,
+        655,
+        830,
+        750
+      ]
+    ]
+  },
+  "USDT": {
+    "sell_boxes": [
+      [
+        560,
+        390,
+        810,
+        472
+      ]
     ],
-    "footer_box": [0, 972, 1448, 1055]
+    "buy_boxes": [
+      [
+        560,
+        575,
+        810,
+        657
+      ]
+    ]
+  },
+  "EUR": {
+    "sell_boxes": [
+      [
+        560,
+        390,
+        810,
+        472
+      ]
+    ],
+    "buy_boxes": [
+      [
+        560,
+        575,
+        810,
+        657
+      ]
+    ]
+  },
+  "LOGO": {
+    "shamsi_cell": [
+      470,
+      835,
+      730,
+      887
+    ],
+    "gregorian_cell": [
+      470,
+      930,
+      730,
+      982
+    ]
   }
 }

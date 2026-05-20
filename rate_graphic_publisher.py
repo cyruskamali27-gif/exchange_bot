@@ -143,12 +143,7 @@ def write_cell(
     if not text:
         return
 
-    # Sample background from master and flood-fill to cover baked-in placeholder digits
-    all_px = list(master.crop((x1, y1, x2, y2)).convert("RGB").getdata())
-    bg_px  = [p for p in all_px if sum(p) < 600] or all_px
-    bg     = tuple(sum(p[i] for p in bg_px) // len(bg_px) for i in range(3))
-    draw   = ImageDraw.Draw(working)
-    draw.rectangle([x1, y1, x2, y2], fill=(*bg, 255))
+    draw = ImageDraw.Draw(working)
     fs   = min(max_font, max(min_font, int(bh * 0.60)))
     font = _font(fs)
     bb   = draw.textbbox((0, 0), text, font=font)
