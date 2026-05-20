@@ -133,6 +133,7 @@ def write_cell(
     color:    tuple = (255, 255, 255, 255),
     max_font: int = 60,
     min_font: int = 14,
+    erase_bg: bool = False,
 ) -> None:
     x1, y1, x2, y2 = (int(v) for v in box)
     bw, bh = x2 - x1, y2 - y1
@@ -144,6 +145,12 @@ def write_cell(
         return
 
     draw = ImageDraw.Draw(working)
+    if erase_bg:
+        # Sample master bg and flood-fill to erase baked-in placeholder digits
+        all_px = list(master.crop((x1, y1, x2, y2)).convert("RGB").getdata())
+        bg_px  = [p for p in all_px if sum(p) < 600] or all_px
+        bg     = tuple(sum(p[i] for p in bg_px) // len(bg_px) for i in range(3))
+        draw.rectangle([x1, y1, x2, y2], fill=(*bg, 255))
     fs   = min(max_font, max(min_font, int(bh * 0.60)))
     font = _font(fs)
     bb   = draw.textbbox((0, 0), text, font=font)
@@ -219,6 +226,8 @@ def generate_poster(currency: str, prices: dict) -> Path | None:
     working = master.copy()
 
     is_ratio = currency in ("USACAN", "EUR")
+    erase_bg = currency in ("CAD", "USD")
+
     def fmt(v: float | None) -> str:
         if v is None:
             return ""
@@ -229,12 +238,12 @@ def generate_poster(currency: str, prices: dict) -> Path | None:
     sell_boxes = coords.get("sell_boxes", [])
     sell_keys  = coords.get("sell_keys", ["sell"] * len(sell_boxes))
     for box, key in zip(sell_boxes, sell_keys):
-        write_cell(working, master, box, fmt(prices.get(key)), WHITE)
+        write_cell(working, master, box, fmt(prices.get(key)), WHITE, erase_bg=erase_bg)
 
     buy_boxes = coords.get("buy_boxes", [])
     buy_keys  = coords.get("buy_keys", ["buy"] * len(buy_boxes))
     for box, key in zip(buy_boxes, buy_keys):
-        write_cell(working, master, box, fmt(prices.get(key)), WHITE)
+        write_cell(working, master, box, fmt(prices.get(key)), WHITE, erase_bg=erase_bg)
 
     out = OUTPUT_FILES[currency]
     working.convert("RGB").save(str(out), "PNG")
