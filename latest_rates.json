@@ -1,0 +1,31 @@
+{
+  "rates": {
+    "USD": {
+      "sell": 181000,
+      "sell_inside_usa": 180500,
+      "sell_etransfer": 180000,
+      "buy": 176351,
+      "buy_direct": 175500
+    },
+    "CAD": {
+      "sell": 127000,
+      "sell_cheque": 126500,
+      "sell_etransfer": 126000,
+      "buy": 125000,
+      "buy_direct": 124500
+    },
+    "USDT": {
+      "sell": 179149,
+      "buy": 175149
+    },
+    "EUR": {
+      "sell": 1.65,
+      "buy": 1.64
+    },
+    "USACAN": {
+      "sell": 1.43,
+      "buy": 1.41
+    }
+  },
+  "updated_at": "2026-05-20T19:17:19.254201-04:00"
+}

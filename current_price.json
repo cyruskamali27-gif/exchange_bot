@@ -1,0 +1,20 @@
+{
+  "USDT": {
+    "price": 178902,
+    "buy": 174902,
+    "source": "tetherpriceFa",
+    "updated_at": "2026-05-19T01:22:45.252675"
+  },
+  "USD": {
+    "price": 180351,
+    "our_sell": 180151,
+    "our_buy": 176351,
+    "updated_at": 1778524464
+  },
+  "CAD": {
+    "price": 132513,
+    "our_sell": 132313,
+    "our_buy": 128513,
+    "updated_at": 1778605325
+  }
+}
