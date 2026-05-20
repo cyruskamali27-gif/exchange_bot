@@ -173,8 +173,22 @@ def write_cell(
         bb    = draw.textbbox((cx, cy), text, font=font, anchor="mm")
         tw    = bb[2] - bb[0]
 
-    draw.text((cx + 2, cy + 2), text, font=font, fill=(0, 0, 0, 120), anchor="mm")
-    draw.text((cx, cy),         text, font=font, fill=color,           anchor="mm")
+    # Dynamic sticker sized exactly to the text
+    try:
+        text_w = draw.textlength(text, font=font)
+    except Exception:
+        text_w = tw
+    text_h = font.size if hasattr(font, "size") else fs
+
+    pad_x, pad_y = 30, 15
+    stk_x1 = cx - (text_w / 2) - pad_x
+    stk_y1 = cy - (text_h / 2) - pad_y
+    stk_x2 = cx + (text_w / 2) + pad_x
+    stk_y2 = cy + (text_h / 2) + pad_y
+    draw.rounded_rectangle([stk_x1, stk_y1, stk_x2, stk_y2],
+                            radius=10, fill="#04120B", outline="#2C4C38", width=2)
+
+    draw.text((cx, cy), text, font=font, fill=color, anchor="mm")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
