@@ -39,6 +39,7 @@ from config import BOT_TOKEN, ADMIN_ID
 BASE          = Path("/var/www/exchange_bot")
 TEMPLATES_DIR = BASE / "templates_clean"   # canonical clean masters — never modified
 COORDS_FILE   = BASE / "poster_coordinates.json"
+ZONES_FILE    = BASE / "price_zones.json"
 RATES_FILE    = BASE / "latest_rates.json"
 CACHE_FILE    = BASE / "current_price.json"
 OUTPUT_DIR    = BASE / "final"
@@ -71,6 +72,27 @@ OUTPUT_FILES: dict[str, Path] = {k: OUTPUT_DIR / v for k, v in TEMPLATE_FILES.it
 LOGO_SHAMSI_CELL    = [637, 948,  960, 1058]
 LOGO_GREGORIAN_CELL = [637, 1058, 960, 1168]
 
+# Center-point price coordinates (used instead of box coords for these currencies)
+PRICE_COORDS: dict[str, list[tuple[int, int]]] = {
+    "USD": [
+        (660, 350),
+        (660, 485),
+        (660, 620),
+        (660, 755),
+        (660, 890),
+    ],
+    "USDT": [
+        (650, 445),
+        (650, 635),
+    ],
+    "EUR": [
+        (650, 445),
+        (650, 635),
+    ],
+}
+_PT_HALF_W = 150   # half-width of cell box derived from a center point
+_PT_HALF_H =  55   # half-height of cell box derived from a center point
+
 # Publish order (logo is prepended at runtime)
 PUBLISH_ORDER: list[tuple[str, str]] = [
     ("CAD",    "Canada"),
@@ -96,6 +118,15 @@ def _load_coords() -> dict:
         raise RuntimeError(f"Cannot load {COORDS_FILE}: {exc}")
 
 POSTER_COORDS: dict = _load_coords()
+
+
+def _load_zones() -> dict:
+    try:
+        return json.loads(ZONES_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+PRICE_ZONES: dict = _load_zones()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -165,16 +196,20 @@ def write_cell(
     draw = ImageDraw.Draw(working)
     fs   = min(max_font, max(min_font, int(bh * 0.60)))
     font = _font(fs)
-    bb   = draw.textbbox((cx, cy), text, font=font, anchor="mm")
+    bb   = draw.textbbox((cx, cy), text, font=font, )
     tw   = bb[2] - bb[0]
     while tw > bw - 8 and fs > min_font:
         fs   -= 2
         font  = _font(fs)
-        bb    = draw.textbbox((cx, cy), text, font=font, anchor="mm")
+        bb    = draw.textbbox((cx, cy), text, font=font, )
         tw    = bb[2] - bb[0]
 
-    draw.text((cx + 2, cy + 2), text, font=font, fill=(0, 0, 0, 120), anchor="mm")
-    draw.text((cx, cy),         text, font=font, fill=color,           anchor="mm")
+    bb2 = draw.textbbox((0, 0), text, font=font)
+    tw2 = bb2[2] - bb2[0]
+    th2 = bb2[3] - bb2[1]
+    draw.text((cx + 2 - tw2 // 2, cy + 2 - th2 // 2), text, font=font, fill=(0, 0, 0, 120))
+    draw.text((cx     - tw2 // 2, cy     - th2 // 2), text, font=font, fill=color)
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -249,15 +284,73 @@ def generate_poster(currency: str, prices: dict) -> Path | None:
             return _sample_bg(master, int(box[1]), int(box[3]))
         return None
 
-    sell_boxes = coords.get("sell_boxes", [])
-    sell_keys  = coords.get("sell_keys", ["sell"] * len(sell_boxes))
-    for box, key in zip(sell_boxes, sell_keys):
-        write_cell(working, master, box, fmt(prices.get(key)), WHITE, bg_color=bg(box))
+    if currency in PRICE_COORDS:
+        sell_keys = coords.get("sell_keys", ["sell"])
+        buy_keys  = coords.get("buy_keys",  ["buy"])
+        all_keys  = sell_keys + buy_keys
+        for (cx, cy), key in zip(PRICE_COORDS[currency], all_keys):
+            box = [cx - _PT_HALF_W, cy - _PT_HALF_H, cx + _PT_HALF_W, cy + _PT_HALF_H]
+            write_cell(working, master, box, fmt(prices.get(key)), WHITE)
+    else:
+        sell_boxes = coords.get("sell_boxes", [])
+        sell_keys  = coords.get("sell_keys", ["sell"] * len(sell_boxes))
+        for box, key in zip(sell_boxes, sell_keys):
+            write_cell(working, master, box, fmt(prices.get(key)), WHITE, bg_color=bg(box))
 
-    buy_boxes = coords.get("buy_boxes", [])
-    buy_keys  = coords.get("buy_keys", ["buy"] * len(buy_boxes))
-    for box, key in zip(buy_boxes, buy_keys):
-        write_cell(working, master, box, fmt(prices.get(key)), WHITE, bg_color=bg(box))
+        buy_boxes = coords.get("buy_boxes", [])
+        buy_keys  = coords.get("buy_keys", ["buy"] * len(buy_boxes))
+        for box, key in zip(buy_boxes, buy_keys):
+            write_cell(working, master, box, fmt(prices.get(key)), WHITE, bg_color=bg(box))
+
+    out = OUTPUT_FILES[currency]
+    working.convert("RGB").save(str(out), "PNG")
+    log.info(f"[{currency}] {prices} → {out.name}")
+    return out
+
+
+def generate_poster_v2(currency: str, prices: dict) -> Path | None:
+    """Render prices using price_zones.json (new template system)."""
+    zones = PRICE_ZONES.get(currency)
+    if not zones:
+        return generate_poster(currency, prices)  # fall back to legacy
+
+    tpl = TEMPLATES_DIR / TEMPLATE_FILES.get(currency, "")
+    if not tpl.exists():
+        log.error(f"[{currency}] template missing: {tpl}")
+        return None
+
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    master  = Image.open(tpl).convert("RGBA")
+    working = master.copy()
+    draw    = ImageDraw.Draw(working)
+
+    is_ratio = currency in ("USACAN", "EUR")
+
+    def fmt(v: float | None) -> str:
+        if v is None:
+            return ""
+        return f"{v:.2f}" if is_ratio else f"{int(v):,}"
+
+    for zone in zones:
+        text = fmt(prices.get(zone["key"]))
+        if not text:
+            continue
+        cx, cy = zone["cx"], zone["cy"]
+        x1, y1, x2, y2 = zone["box"]
+        bw, bh = x2 - x1, y2 - y1
+
+        fs   = min(62, max(22, int(bh * 0.56)))
+        font = _font(fs)
+        bb   = draw.textbbox((0, 0), text, font=font)
+        tw   = bb[2] - bb[0]
+        while tw > bw - 20 and fs > 22:
+            fs  -= 2
+            font = _font(fs)
+            bb   = draw.textbbox((0, 0), text, font=font)
+            tw   = bb[2] - bb[0]
+
+        th = bb[3] - bb[1]
+        draw.text((cx - tw // 2, cy - th // 2), text, font=font, fill=(255, 255, 255, 255))
 
     out = OUTPUT_FILES[currency]
     working.convert("RGB").save(str(out), "PNG")
@@ -490,7 +583,7 @@ async def post_all(force: bool = False, fresh_text: str | None = None) -> None:
     for cur_code, name_en in PUBLISH_ORDER:
         prices = rates.get(cur_code, {})
         try:
-            path = generate_poster(cur_code, prices)
+            path = generate_poster_v2(cur_code, prices)
             if path:
                 mid = post_image(path)
                 log.info(f"[{cur_code}] message_id={mid}")
