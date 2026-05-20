@@ -8,10 +8,12 @@
       [545, 464, 878, 545],
       [545, 585, 878, 666]
     ],
+    "sell_keys": ["sell", "sell_cheque", "sell_etransfer"],
     "buy_boxes": [
       [545, 706, 878, 787],
       [545, 827, 878, 908]
     ],
+    "buy_keys": ["buy", "buy_direct"],
     "footer_box": [0, 972, 1448, 1055]
   },
   "USD": {
@@ -22,10 +24,12 @@
       [503, 464, 852, 549],
       [503, 587, 852, 671]
     ],
+    "sell_keys": ["sell", "sell_inside_usa", "sell_etransfer"],
     "buy_boxes": [
       [503, 706, 852, 790],
       [503, 826, 852, 910]
     ],
+    "buy_keys": ["buy", "buy_direct"],
     "footer_box": [0, 972, 1448, 1055]
   },
   "EUR": {

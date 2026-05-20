@@ -5,7 +5,7 @@ import sys
 sys.path.insert(0, "/var/www/exchange_bot")
 
 from rate_graphic_publisher import (
-    scan_and_post, TORONTO_TZ, TEMPLATES_DIR, TEMPLATE_FILES, OUTPUT_FILES, PUBLISH_ORDER
+    post_all, TORONTO_TZ, TEMPLATES_DIR, TEMPLATE_FILES, OUTPUT_FILES, PUBLISH_ORDER
 )
 from datetime import datetime
 
@@ -31,7 +31,7 @@ async def main():
 
     print("\nPosting (Bot API — no Telethon session conflict)...\n")
     # client param unused inside scan_and_post; posting is via Bot API
-    await scan_and_post(None, force=True)
+    await post_all(None, force=True)
     print("\n=== Done ===")
 
 if __name__ == "__main__":
