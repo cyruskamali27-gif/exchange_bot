@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Force an immediate rate fetch and post all posters via Bot API (no second Telethon client)."""
+"""Force an immediate rate fetch and post all posters via Bot API."""
 import asyncio
 import sys
 sys.path.insert(0, "/var/www/exchange_bot")
@@ -29,9 +29,8 @@ async def main():
         print("\nABORT: one or more templates missing")
         sys.exit(1)
 
-    print("\nPosting (Bot API — no Telethon session conflict)...\n")
-    # client param unused inside scan_and_post; posting is via Bot API
-    await post_all(None, force=True)
+    print("\nPosting (Bot API)...\n")
+    await post_all(force=True)
     print("\n=== Done ===")
 
 if __name__ == "__main__":

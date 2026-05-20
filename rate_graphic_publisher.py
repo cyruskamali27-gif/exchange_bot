@@ -26,7 +26,6 @@ from zoneinfo import ZoneInfo
 
 import requests as _req
 from PIL import Image, ImageDraw, ImageFont
-from telethon import TelegramClient, events
 
 try:
     import jdatetime
@@ -34,10 +33,7 @@ try:
 except ImportError:
     _HAS_JDATE = False
 
-from config import (
-    TELETHON_API_ID, TELETHON_API_HASH, TELETHON_PHONE,
-    BOT_TOKEN, ADMIN_ID,
-)
+from config import BOT_TOKEN, ADMIN_ID
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 BASE          = Path("/var/www/exchange_bot")
@@ -48,13 +44,11 @@ CACHE_FILE    = BASE / "current_price.json"
 OUTPUT_DIR    = BASE / "final"
 
 # ── Channel config ─────────────────────────────────────────────────────────────
-SOURCE_CHANNEL = "SarafiBahmaniCa"
 _publish_env   = os.environ.get("PUBLISH_CHANNEL", "@cyrusGlobalExchange")
 TARGET_CHANNEL = (_publish_env if _publish_env.startswith("@") or _publish_env.lstrip("-").isdigit()
                   else f"@{_publish_env}")
 
 # ── Runtime config ─────────────────────────────────────────────────────────────
-SESSION       = "rate_publisher"
 TORONTO_TZ    = ZoneInfo("America/Toronto")
 MONITOR_HOURS = 12
 BUY_ADJ       = int(os.environ.get("PUBLISHER_BUY_ADJ", "500"))
@@ -420,11 +414,7 @@ def _apply_adj(parsed: dict) -> dict:
 # Main post cycle
 # ─────────────────────────────────────────────────────────────────────────────
 
-async def post_all(
-    client:     TelegramClient,
-    force:      bool = False,
-    fresh_text: str  | None = None,
-) -> None:
+async def post_all(force: bool = False, fresh_text: str | None = None) -> None:
     now = datetime.now(TORONTO_TZ)
     log.info(f"=== post_all force={force}  {now:%Y-%m-%d %H:%M %Z} ===")
 
@@ -500,32 +490,12 @@ async def post_all(
 # ─────────────────────────────────────────────────────────────────────────────
 
 async def run_publisher() -> None:
-    log.info("Rate Publisher starting")
+    log.info("Rate Publisher starting (bot-token mode — no Telethon)")
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-
-    client = TelegramClient(SESSION, int(TELETHON_API_ID), TELETHON_API_HASH)
-    await client.connect()
-    if not await client.is_user_authorized():
-        log.error("Telethon session not authorized — run auth script then restart")
-        notify_admin("rate-graphic-publisher: Telethon session expired, needs re-auth")
-        await client.disconnect()
-        return
-    log.info(f"Telethon connected  →  target={TARGET_CHANNEL}")
 
     monitor_end       = datetime.now(TORONTO_TZ) + timedelta(hours=MONITOR_HOURS)
     last_daily_date   = None
     last_checked_hour = -1
-
-    @client.on(events.NewMessage(chats=SOURCE_CHANNEL))
-    async def _on_bahmani(event):
-        text = (getattr(event.message, "text",    None) or
-                getattr(event.message, "message", None) or "")
-        if text.strip():
-            log.info(f"Bahmani text id={event.id} — parsing")
-            await post_all(client, force=False, fresh_text=text)
-        else:
-            log.info(f"Bahmani media id={event.id} — reloading files")
-            await post_all(client, force=False)
 
     while True:
         try:
@@ -537,24 +507,24 @@ async def run_publisher() -> None:
                 if hour != last_checked_hour and now.minute < 10:
                     remaining = int((monitor_end - now).total_seconds() / 3600)
                     log.info(f"[12h] Hourly check {hour:02d}:00 (~{remaining}h left)")
-                    await post_all(client, force=False)
+                    await post_all(force=False)
                     last_checked_hour = hour
             else:
                 if hour == 9 and last_daily_date != today:
                     log.info("9 AM daily post")
-                    await post_all(client, force=True)
+                    await post_all(force=True)
                     last_daily_date   = today
                     last_checked_hour = hour
                 elif hour != last_checked_hour and now.minute < 10:
                     log.info(f"Hourly check {hour:02d}:00")
-                    await post_all(client, force=False)
+                    await post_all(force=False)
                     last_checked_hour = hour
 
         except Exception as exc:
             log.error(f"Scheduler error: {exc}")
             notify_admin(f"Scheduler error: {exc}")
 
-        await asyncio.sleep(300)
+        await asyncio.sleep(60)
 
 
 if __name__ == "__main__":
