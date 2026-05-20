@@ -133,38 +133,34 @@ def write_cell(
     color:    tuple = (255, 255, 255, 255),
     max_font: int = 60,
     min_font: int = 14,
-    erase_bg: bool = False,
+    bg_color: tuple | None = None,
 ) -> None:
     x1, y1, x2, y2 = (int(v) for v in box)
     bw, bh = x2 - x1, y2 - y1
+    cx, cy = x1 + bw // 2, y1 + bh // 2
 
-    # Restore clean master region (wipes any previous render)
-    working.paste(master.crop((x1, y1, x2, y2)), (x1, y1))
+    if bg_color:
+        ImageDraw.Draw(working).rectangle((x1, y1, x2, y2), fill=bg_color)
+    else:
+        # Restore clean master region (wipes any previous render)
+        working.paste(master.crop((x1, y1, x2, y2)), (x1, y1))
 
     if not text:
         return
 
     draw = ImageDraw.Draw(working)
-    if erase_bg:
-        # Sample master bg and flood-fill to erase baked-in placeholder digits
-        all_px = list(master.crop((x1, y1, x2, y2)).convert("RGB").getdata())
-        bg_px  = [p for p in all_px if sum(p) < 600] or all_px
-        bg     = tuple(sum(p[i] for p in bg_px) // len(bg_px) for i in range(3))
-        draw.rectangle([x1, y1, x2, y2], fill=(*bg, 255))
     fs   = min(max_font, max(min_font, int(bh * 0.60)))
     font = _font(fs)
-    bb   = draw.textbbox((0, 0), text, font=font)
-    tw, th = bb[2] - bb[0], bb[3] - bb[1]
+    bb   = draw.textbbox((cx, cy), text, font=font, anchor="mm")
+    tw   = bb[2] - bb[0]
     while tw > bw - 8 and fs > min_font:
         fs   -= 2
         font  = _font(fs)
-        bb    = draw.textbbox((0, 0), text, font=font)
-        tw, th = bb[2] - bb[0], bb[3] - bb[1]
+        bb    = draw.textbbox((cx, cy), text, font=font, anchor="mm")
+        tw    = bb[2] - bb[0]
 
-    draw.text(
-        (x1 + (bw - tw) // 2, y1 + (bh - th) // 2),
-        text, font=font, fill=color,
-    )
+    draw.text((cx + 2, cy + 2), text, font=font, fill=(0, 0, 0, 120), anchor="mm")
+    draw.text((cx, cy),         text, font=font, fill=color,           anchor="mm")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -226,24 +222,24 @@ def generate_poster(currency: str, prices: dict) -> Path | None:
     working = master.copy()
 
     is_ratio = currency in ("USACAN", "EUR")
-    erase_bg = currency in ("CAD", "USD")
 
     def fmt(v: float | None) -> str:
         if v is None:
             return ""
         return f"{v:.2f}" if is_ratio else f"{int(v):,}"
 
-    WHITE = (255, 255, 255, 255)
+    WHITE    = (255, 255, 255, 255)
+    bg_color = None
 
     sell_boxes = coords.get("sell_boxes", [])
     sell_keys  = coords.get("sell_keys", ["sell"] * len(sell_boxes))
     for box, key in zip(sell_boxes, sell_keys):
-        write_cell(working, master, box, fmt(prices.get(key)), WHITE, erase_bg=erase_bg)
+        write_cell(working, master, box, fmt(prices.get(key)), WHITE, bg_color=bg_color)
 
     buy_boxes = coords.get("buy_boxes", [])
     buy_keys  = coords.get("buy_keys", ["buy"] * len(buy_boxes))
     for box, key in zip(buy_boxes, buy_keys):
-        write_cell(working, master, box, fmt(prices.get(key)), WHITE, erase_bg=erase_bg)
+        write_cell(working, master, box, fmt(prices.get(key)), WHITE, bg_color=bg_color)
 
     out = OUTPUT_FILES[currency]
     working.convert("RGB").save(str(out), "PNG")
@@ -532,4 +528,8 @@ async def run_publisher() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(run_publisher())
+    import sys
+    if "--force-clean" in sys.argv:
+        asyncio.run(post_all(force=True))
+    else:
+        asyncio.run(run_publisher())
