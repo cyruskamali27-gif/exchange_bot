@@ -125,18 +125,6 @@ def _font(size: int) -> ImageFont.FreeTypeFont:
         return ImageFont.load_default()
 
 
-def _sample_bg(img: Image.Image, y1: int, y2: int, fallback: tuple = (40, 8, 8, 255)) -> tuple:
-    import statistics
-    pts = []
-    for y in range(y1 + 15, y2 - 15, 5):
-        for x in range(760, 835, 5):
-            r, g, b, a = img.getpixel((x, y))
-            if r < 120 and g < 80 and b < 80:
-                pts.append((r, g, b, a))
-    if not pts:
-        return fallback
-    return tuple(int(statistics.median([p[i] for p in pts])) for i in range(4))
-
 
 def write_cell(
     working:  Image.Image,
@@ -146,18 +134,13 @@ def write_cell(
     color:    tuple = (255, 255, 255, 255),
     max_font: int = 60,
     min_font: int = 14,
-    bg_color: tuple | None = None,
 ) -> None:
     x1, y1, x2, y2 = (int(v) for v in box)
     bw, bh = x2 - x1, y2 - y1
     cx, cy = x1 + bw // 2, y1 + bh // 2
 
-    if bg_color:
-#        ImageDraw.Draw(working).rectangle((x1, y1, x2, y2), fill=bg_color)
-        pass
-    else:
-        # Restore clean master region (wipes any previous render)
-        working.paste(master.crop((x1, y1, x2, y2)), (x1, y1))
+    # Restore clean master region (wipes any previous render)
+    working.paste(master.crop((x1, y1, x2, y2)), (x1, y1))
 
     if not text:
         return
@@ -172,21 +155,6 @@ def write_cell(
         font  = _font(fs)
         bb    = draw.textbbox((cx, cy), text, font=font, anchor="mm")
         tw    = bb[2] - bb[0]
-
-    # Dynamic sticker sized exactly to the text
-    try:
-        text_w = draw.textlength(text, font=font)
-    except Exception:
-        text_w = tw
-    text_h = font.size if hasattr(font, "size") else fs
-
-    pad_x, pad_y = 30, 15
-    stk_x1 = cx - (text_w / 2) - pad_x
-    stk_y1 = cy - (text_h / 2) - pad_y
-    stk_x2 = cx + (text_w / 2) + pad_x
-    stk_y2 = cy + (text_h / 2) + pad_y
-    draw.rounded_rectangle([stk_x1, stk_y1, stk_x2, stk_y2],
-                            radius=10, fill="#04120B", outline="#2C4C38", width=2)
 
     draw.text((cx, cy), text, font=font, fill=color, anchor="mm")
 
@@ -257,23 +225,17 @@ def generate_poster(currency: str, prices: dict) -> Path | None:
         return f"{v:.2f}" if is_ratio else f"{int(v):,}"
 
     WHITE = (255, 255, 255, 255)
-
-    def bg(box: list) -> tuple | None:
-        if currency == "CAD":
-            return _sample_bg(master, int(box[1]), int(box[3]))
-        return None
-
     mf = 90 if currency == "CAD" else 60
 
     sell_boxes = coords.get("sell_boxes", [])
     sell_keys  = coords.get("sell_keys", ["sell"] * len(sell_boxes))
     for box, key in zip(sell_boxes, sell_keys):
-        write_cell(working, master, box, fmt(prices.get(key)), WHITE, max_font=mf, bg_color=bg(box))
+        write_cell(working, master, box, fmt(prices.get(key)), WHITE, max_font=mf)
 
     buy_boxes = coords.get("buy_boxes", [])
     buy_keys  = coords.get("buy_keys", ["buy"] * len(buy_boxes))
     for box, key in zip(buy_boxes, buy_keys):
-        write_cell(working, master, box, fmt(prices.get(key)), WHITE, max_font=mf, bg_color=bg(box))
+        write_cell(working, master, box, fmt(prices.get(key)), WHITE, max_font=mf)
 
     out = OUTPUT_FILES[currency]
     working.convert("RGB").save(str(out), "PNG")
