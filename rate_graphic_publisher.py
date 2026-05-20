@@ -137,7 +137,8 @@ def write_cell(
 ) -> None:
     x1, y1, x2, y2 = (int(v) for v in box)
     bw, bh = x2 - x1, y2 - y1
-    cx, cy = x1 + bw // 2, y1 + bh // 2
+    cx = (x1 + x2) / 2
+    cy = (y1 + y2) / 2
 
     # Restore clean master region (wipes any previous render)
     working.paste(master.crop((x1, y1, x2, y2)), (x1, y1))
@@ -145,16 +146,12 @@ def write_cell(
     if not text:
         return
 
-    draw = ImageDraw.Draw(working)
-    fs   = min(max_font, max(min_font, int(bh * 1.00)))
-    font = _font(fs)
-    bb   = draw.textbbox((cx, cy), text, font=font, anchor="mm")
-    tw   = bb[2] - bb[0]
-    while tw > bw - 8 and fs > min_font:
-        fs   -= 2
-        font  = _font(fs)
-        bb    = draw.textbbox((cx, cy), text, font=font, anchor="mm")
-        tw    = bb[2] - bb[0]
+    draw    = ImageDraw.Draw(working)
+    font    = _font(max_font)
+    max_w   = bw - 10
+
+    while draw.textlength(text, font=font) > max_w and font.size > 12:
+        font = font.font_variant(size=font.size - 2)
 
     draw.text((cx, cy), text, font=font, fill=color, anchor="mm")
 
