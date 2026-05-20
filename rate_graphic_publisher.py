@@ -163,7 +163,7 @@ def write_cell(
         return
 
     draw = ImageDraw.Draw(working)
-    fs   = min(max_font, max(min_font, int(bh * 0.80)))
+    fs   = min(max_font, max(min_font, int(bh * 1.00)))
     font = _font(fs)
     bb   = draw.textbbox((cx, cy), text, font=font, anchor="mm")
     tw   = bb[2] - bb[0]
@@ -249,7 +249,7 @@ def generate_poster(currency: str, prices: dict) -> Path | None:
             return _sample_bg(master, int(box[1]), int(box[3]))
         return None
 
-    mf = 72 if currency == "CAD" else 60
+    mf = 90 if currency == "CAD" else 60
 
     sell_boxes = coords.get("sell_boxes", [])
     sell_keys  = coords.get("sell_keys", ["sell"] * len(sell_boxes))
