@@ -163,7 +163,7 @@ def write_cell(
         return
 
     draw = ImageDraw.Draw(working)
-    fs   = min(max_font, max(min_font, int(bh * 0.60)))
+    fs   = min(max_font, max(min_font, int(bh * 0.80)))
     font = _font(fs)
     bb   = draw.textbbox((cx, cy), text, font=font, anchor="mm")
     tw   = bb[2] - bb[0]
@@ -249,15 +249,17 @@ def generate_poster(currency: str, prices: dict) -> Path | None:
             return _sample_bg(master, int(box[1]), int(box[3]))
         return None
 
+    mf = 72 if currency == "CAD" else 60
+
     sell_boxes = coords.get("sell_boxes", [])
     sell_keys  = coords.get("sell_keys", ["sell"] * len(sell_boxes))
     for box, key in zip(sell_boxes, sell_keys):
-        write_cell(working, master, box, fmt(prices.get(key)), WHITE, bg_color=bg(box))
+        write_cell(working, master, box, fmt(prices.get(key)), WHITE, max_font=mf, bg_color=bg(box))
 
     buy_boxes = coords.get("buy_boxes", [])
     buy_keys  = coords.get("buy_keys", ["buy"] * len(buy_boxes))
     for box, key in zip(buy_boxes, buy_keys):
-        write_cell(working, master, box, fmt(prices.get(key)), WHITE, bg_color=bg(box))
+        write_cell(working, master, box, fmt(prices.get(key)), WHITE, max_font=mf, bg_color=bg(box))
 
     out = OUTPUT_FILES[currency]
     working.convert("RGB").save(str(out), "PNG")
