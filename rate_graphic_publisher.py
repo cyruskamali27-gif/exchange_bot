@@ -125,6 +125,19 @@ def _font(size: int) -> ImageFont.FreeTypeFont:
         return ImageFont.load_default()
 
 
+def _sample_bg(img: Image.Image, y1: int, y2: int, fallback: tuple = (40, 8, 8, 255)) -> tuple:
+    import statistics
+    pts = []
+    for y in range(y1 + 15, y2 - 15, 5):
+        for x in range(760, 835, 5):
+            r, g, b, a = img.getpixel((x, y))
+            if r < 120 and g < 80 and b < 80:
+                pts.append((r, g, b, a))
+    if not pts:
+        return fallback
+    return tuple(int(statistics.median([p[i] for p in pts])) for i in range(4))
+
+
 def write_cell(
     working:  Image.Image,
     master:   Image.Image,
@@ -140,7 +153,8 @@ def write_cell(
     cx, cy = x1 + bw // 2, y1 + bh // 2
 
     if bg_color:
-        ImageDraw.Draw(working).rectangle((x1, y1, x2, y2), fill=bg_color)
+#        ImageDraw.Draw(working).rectangle((x1, y1, x2, y2), fill=bg_color)
+        pass
     else:
         # Restore clean master region (wipes any previous render)
         working.paste(master.crop((x1, y1, x2, y2)), (x1, y1))
@@ -228,18 +242,22 @@ def generate_poster(currency: str, prices: dict) -> Path | None:
             return ""
         return f"{v:.2f}" if is_ratio else f"{int(v):,}"
 
-    WHITE    = (255, 255, 255, 255)
-    bg_color = None
+    WHITE = (255, 255, 255, 255)
+
+    def bg(box: list) -> tuple | None:
+        if currency == "CAD":
+            return _sample_bg(master, int(box[1]), int(box[3]))
+        return None
 
     sell_boxes = coords.get("sell_boxes", [])
     sell_keys  = coords.get("sell_keys", ["sell"] * len(sell_boxes))
     for box, key in zip(sell_boxes, sell_keys):
-        write_cell(working, master, box, fmt(prices.get(key)), WHITE, bg_color=bg_color)
+        write_cell(working, master, box, fmt(prices.get(key)), WHITE, bg_color=bg(box))
 
     buy_boxes = coords.get("buy_boxes", [])
     buy_keys  = coords.get("buy_keys", ["buy"] * len(buy_boxes))
     for box, key in zip(buy_boxes, buy_keys):
-        write_cell(working, master, box, fmt(prices.get(key)), WHITE, bg_color=bg_color)
+        write_cell(working, master, box, fmt(prices.get(key)), WHITE, bg_color=bg(box))
 
     out = OUTPUT_FILES[currency]
     working.convert("RGB").save(str(out), "PNG")
