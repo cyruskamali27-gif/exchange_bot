@@ -1,5 +1,5 @@
 {
-  "_note": "Templates are 1448x1086. date_overlay uses clean_bg=True — erases stars/placeholders before writing date. Y bounds start AFTER the Persian title and end just before the first sell_box. Coordinates locked — do not adjust dynamically.",
+  "_note": "CAD=1448x1086; USD/USACAN=1280x1024; EUR/USDT=1280x960. date_overlay uses clean_bg=True — erases stars/placeholders before writing date. Y bounds start AFTER the Persian title and end just before the first sell_box. Coordinates locked — do not adjust dynamically.",
   "CAD": {
     "size": [1448, 1086],
     "date_overlay": [260, 215, 1080, 340],
@@ -17,7 +17,7 @@
     "footer_box": [0, 972, 1448, 1055]
   },
   "USD": {
-    "size": [1448, 1086],
+    "size": [1280, 1024],
     "date_overlay": [260, 195, 1080, 340],
     "sell_boxes": [
       [503, 342, 852, 426],
@@ -33,7 +33,7 @@
     "footer_box": [0, 972, 1448, 1055]
   },
   "EUR": {
-    "size": [1448, 1086],
+    "size": [1280, 960],
     "date_overlay": [260, 205, 1100, 373],
     "sell_boxes": [
       [684, 375, 972, 600]
@@ -44,7 +44,7 @@
     "footer_box": [0, 972, 1448, 1055]
   },
   "USDT": {
-    "size": [1448, 1086],
+    "size": [1280, 960],
     "date_overlay": [260, 162, 1100, 370],
     "sell_boxes": [
       [684, 375, 972, 595]
@@ -55,7 +55,7 @@
     "footer_box": [0, 972, 1448, 1055]
   },
   "USACAN": {
-    "size": [1448, 1086],
+    "size": [1280, 1024],
     "date_overlay": [260, 167, 1100, 385],
     "sell_boxes": [
       [728, 385, 1012, 532]

@@ -504,7 +504,12 @@ async def run_publisher() -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     client = TelegramClient(SESSION, int(TELETHON_API_ID), TELETHON_API_HASH)
-    await client.start(phone=TELETHON_PHONE)
+    await client.connect()
+    if not await client.is_user_authorized():
+        log.error("Telethon session not authorized — run auth script then restart")
+        notify_admin("rate-graphic-publisher: Telethon session expired, needs re-auth")
+        await client.disconnect()
+        return
     log.info(f"Telethon connected  →  target={TARGET_CHANNEL}")
 
     monitor_end       = datetime.now(TORONTO_TZ) + timedelta(hours=MONITOR_HOURS)
