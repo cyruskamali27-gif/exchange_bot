@@ -125,6 +125,27 @@ def _font(size: int) -> ImageFont.FreeTypeFont:
         return ImageFont.load_default()
 
 
+def _fit_font(draw: ImageDraw.ImageDraw, text: str, box_xywh: tuple,
+              max_size: int = 72, min_size: int = 32) -> ImageFont.FreeTypeFont:
+    """Return the largest font that fits text within 90% width and 80% height of box."""
+    x, y, w, h = box_xywh
+    for size in range(max_size, min_size - 1, -2):
+        font = _font(size)
+        bb   = draw.textbbox((0, 0), text, font=font)
+        if (bb[2] - bb[0]) <= w * 0.90 and (bb[3] - bb[1]) <= h * 0.80:
+            return font
+    return _font(min_size)
+
+
+def _draw_centered(draw: ImageDraw.ImageDraw, box_xywh: tuple,
+                   text: str, font, color: tuple) -> None:
+    """Draw text mathematically centered inside box (x, y, width, height)."""
+    x, y, w, h = box_xywh
+    bb = draw.textbbox((0, 0), text, font=font)
+    tx = x + (w - (bb[2] - bb[0])) / 2 - bb[0]
+    ty = y + (h - (bb[3] - bb[1])) / 2 - bb[1]
+    draw.text((tx, ty), text, font=font, fill=color)
+
 
 def write_cell(
     working:  Image.Image,
@@ -133,12 +154,10 @@ def write_cell(
     text:     str,
     color:    tuple = (255, 255, 255, 255),
     max_font: int = 60,
-    min_font: int = 14,
+    min_font: int = 32,
 ) -> None:
     x1, y1, x2, y2 = (int(v) for v in box)
     bw, bh = x2 - x1, y2 - y1
-    cx = (x1 + x2) / 2
-    cy = (y1 + y2) / 2
 
     # Restore clean master region (wipes any previous render)
     working.paste(master.crop((x1, y1, x2, y2)), (x1, y1))
@@ -146,14 +165,10 @@ def write_cell(
     if not text:
         return
 
-    draw    = ImageDraw.Draw(working)
-    font    = _font(max_font)
-    max_w   = bw - 10
-
-    while draw.textlength(text, font=font) > max_w and font.size > 12:
-        font = font.font_variant(size=font.size - 2)
-
-    draw.text((cx, cy), text, font=font, fill=color, anchor="mm")
+    draw     = ImageDraw.Draw(working)
+    box_xywh = (x1, y1, bw, bh)
+    font     = _fit_font(draw, text, box_xywh, max_size=max_font, min_size=min_font)
+    _draw_centered(draw, box_xywh, text, font, color)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
