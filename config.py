@@ -3,6 +3,11 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# ─── Production mode ──────────────────────────────────────────────────────────
+# STABLE_PRODUCTION: locked templates + fixed coords + direct price rendering only.
+# AI may only generate optional future backgrounds; never modifies UI.
+RENDERER_MODE = os.environ.get("RENDERER_MODE", "STABLE_PRODUCTION")
+
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 ADMIN_ID = int(os.environ["ADMIN_ID"])
 IRAN_AGENT_ID = int(os.environ["IRAN_AGENT_ID"])
