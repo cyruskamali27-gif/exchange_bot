@@ -1,0 +1,18 @@
+{
+  "currency_title": "CANADIAN DOLLAR",
+  "currency_title_fa": "دلار کانادا",
+  "currency_code": "CAD",
+  "sell_rows": [
+    {"label": "Cash Sell",    "price": "58,500"},
+    {"label": "Left Cheque",  "price": "58,500"},
+    {"label": "E-Transfer",   "price": "58,500"}
+  ],
+  "buy_rows": [
+    {"label": "Cash Buy",         "price": "59,000"},
+    {"label": "Cash Buy Direct",  "price": "59,000"}
+  ],
+  "company":  "CYRUS GLOBAL EXCHANGE",
+  "phone":    "226-962-7729",
+  "telegram": "@cyrusGlobalExchange",
+  "location": "Guelph, Ontario"
+}
